@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node create-sample-data.js:*)",
+      "Bash(claude mcp list:*)",
+      "Bash(node:*)"
+    ]
+  }
+}
