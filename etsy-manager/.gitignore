@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# WhatsApp exports and temporary image folders
+Chat WhatsApp*
+/temp-images
+/uploads
+
+# Extracted data (already in Supabase)
+*-extracted.json
+migrate-excel-schema.js

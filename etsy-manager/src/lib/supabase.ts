@@ -9,42 +9,178 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Types for our database - matching new schema
+// Store interface for multi-tenant support
+export interface Store {
+  id: string;
+  created_at?: string;
+  updated_at?: string;
+  name: string;
+  etsy_shop_name?: string;
+  description?: string;
+  is_active: boolean;
+  settings?: Record<string, any>;
+  notes?: string;
+}
+
+// User interface for authentication with RBAC
+export type UserRole = 'master_admin' | 'store_admin' | 'supplier';
+
+export interface User {
+  id: string;
+  created_at?: string;
+  updated_at?: string;
+  username: string;
+  password_hash: string;
+  email?: string;
+  role: UserRole;
+  store_id?: string; // NULL for master_admin
+  full_name?: string;
+  is_active: boolean;
+  settings?: Record<string, any>;
+  last_login_at?: string;
+}
+
+// User without sensitive data (for client-side use)
+export interface PublicUser {
+  id: string;
+  username: string;
+  email?: string;
+  role: UserRole;
+  store_id?: string;
+  full_name?: string;
+  is_active: boolean;
+}
+
+// Types matching Excel structure exactly
 export interface Order {
   // Primary key
-  id: string; // UUID - Primary Key
-  created_at?: string; // Timestamp
-  updated_at?: string; // Timestamp
+  id: string;
+  created_at?: string;
+  updated_at?: string;
 
-  // Order details
-  ordered_date?: string; // Date
+  // Basic Order Info
+  image_url?: string;
+  ordered_date?: string;
+  product_name?: string;
+  etsy_order_no?: string;
   customer_name?: string;
   address?: string;
-  contact?: string;
-  product_link?: string;
-  image_url?: string;
 
-  // Product specifications
+  // Product Details
+  product_link?: string;
   size?: string;
   color?: string;
   material?: string;
   notes?: string;
 
-  // Financial
+  // Communication Status
+  first_message_sent?: boolean;
+
+  // Supplier Payment
   total_amount_to_pay?: number;
 
   // Shipping & Status
   tracking_number?: string;
   is_paid?: boolean;
+  tracking_added?: boolean;
   is_shipped?: boolean;
+  shipped_message_sent?: boolean;
   is_completed_on_etsy?: boolean;
   is_delivered?: boolean;
+  review_message_sent?: boolean;
 
-  // Issues & Solutions
+  // Supplier Status
+  supplier_acknowledged?: boolean;
+  is_out_of_stock?: boolean;
+
+  // Supplier Info
+  order_from?: string;
+
+  // Financial (Admin Only)
+  sold_for?: number;
+  fees_percent?: number;
+  product_cost?: number;
+  profit?: number;
+
+  // Issues & Notes
   issue?: string;
   the_solution?: string;
   internal_notes?: string;
+
+  // Product Link
+  product_id?: string;
+
+  // Multi-tenant
+  store_id?: string;
 }
 
-// Type for supplier view (excludes financial data)
-export type SupplierOrder = Omit<Order, 'total_amount_to_pay'>;
+// Financial fields that should be hidden from Supplier view (excludes total_amount_to_pay which supplier can see)
+export const FINANCIAL_FIELDS = [
+  'sold_for',
+  'fees_percent',
+  'product_cost',
+  'profit'
+] as const;
+
+// Type for supplier view (excludes financial data, but includes total_amount_to_pay)
+export type SupplierOrder = Omit<Order,
+  'sold_for' | 'fees_percent' | 'product_cost' | 'profit'
+>;
+
+// Columns to select for supplier (excludes financial except total_amount_to_pay)
+export const SUPPLIER_SELECT_COLUMNS = `
+  id, created_at, updated_at,
+  image_url, ordered_date, product_name, etsy_order_no, customer_name, address,
+  product_link, size, color, material, notes,
+  first_message_sent, total_amount_to_pay, tracking_number, is_paid, tracking_added,
+  is_shipped, shipped_message_sent, is_completed_on_etsy,
+  is_delivered, review_message_sent, order_from,
+  supplier_acknowledged, is_out_of_stock,
+  issue, the_solution, internal_notes,
+  product_id
+`;
+
+// Product interface for quotation system
+export interface Product {
+  id: string;
+  created_at?: string;
+  updated_at?: string;
+
+  // Basic Info
+  name: string;
+  description?: string;
+  image_url?: string;
+  product_link?: string;
+
+  // Variants
+  variants?: string;
+
+  // Supplier Info
+  supplier_name?: string;
+
+  // Status
+  is_active: boolean;
+  is_out_of_stock?: boolean;
+
+  // Notes
+  notes?: string;
+
+  // Multi-tenant
+  store_id?: string;
+}
+
+// Product pricing by country/region
+export interface ProductPricing {
+  id: string;
+  product_id: string;
+  country: string; // e.g., "US", "UK/GB", "EU"
+  price: number;
+  shipping_time?: string; // e.g., "6-12days"
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Product with pricing for display
+export interface ProductWithPricing extends Product {
+  pricing?: ProductPricing[];
+}
