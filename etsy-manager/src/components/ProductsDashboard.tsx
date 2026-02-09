@@ -19,6 +19,8 @@ import {
   ExternalLink,
   AlertCircle,
   ClipboardList,
+  Upload,
+  ImageIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -42,6 +44,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterOutOfStock, setFilterOutOfStock] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   // New product form state
   const [newProduct, setNewProduct] = useState<Partial<Product>>({
@@ -212,15 +215,22 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   };
 
   const handleDeleteProduct = async (productId: string) => {
+    setDeleteError('');
     try {
+      // First delete related pricing
+      await supabase.from('product_pricing').delete().eq('product_id', productId);
+
       const { error } = await supabase.from('products').delete().eq('id', productId);
 
       if (error) throw error;
 
       setProducts((prev) => prev.filter((p) => p.id !== productId));
       setDeleteConfirm(null);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error deleting product:', error);
+      setDeleteError(error?.message?.includes('foreign key')
+        ? 'Cannot delete: this product has orders linked to it. Delete the orders first.'
+        : 'Failed to delete product. Please try again.');
     }
   };
 
@@ -367,7 +377,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               >
                 <div className="flex items-start gap-4">
                   {/* Image */}
-                  <div className="relative flex-shrink-0">
+                  <div className="relative flex-shrink-0 group" onClick={(e) => e.stopPropagation()}>
                     {product.image_url ? (
                       <img
                         src={product.image_url}
@@ -379,10 +389,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                         <Camera className="w-8 h-8 text-gray-400" />
                       </div>
                     )}
-                    <label
-                      className="absolute inset-0 cursor-pointer"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    <label className="absolute inset-0 cursor-pointer rounded-lg overflow-hidden">
                       <input
                         type="file"
                         accept="image/*"
@@ -392,6 +399,12 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                           if (file) handleImageUpload(product.id, file, product.image_url);
                         }}
                       />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-center">
+                          <Upload className="w-5 h-5 mx-auto" />
+                          <span className="text-[10px] font-medium">{product.image_url ? 'Change' : 'Upload'}</span>
+                        </div>
+                      </div>
                     </label>
                     {uploadingImage === product.id && (
                       <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
@@ -440,26 +453,23 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     {product.product_link && (
                       <a
                         href={product.product_link}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
                         className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded"
                       >
                         <ExternalLink className="w-5 h-5" />
                       </a>
                     )}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteConfirm(product.id);
-                      }}
-                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                      type="button"
+                      onClick={() => setDeleteConfirm(product.id)}
+                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                     >
-                      <Trash2 className="w-5 h-5" />
+                      <Trash2 className="w-5 h-5 pointer-events-none" />
                     </button>
                     {expandedProduct === product.id ? (
                       <ChevronUp className="w-5 h-5 text-gray-400" />
@@ -473,6 +483,55 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               {/* Expanded Content */}
               {expandedProduct === product.id && (
                 <div className="border-t bg-gray-50 p-4 space-y-4">
+                  {/* Product Image */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-900 mb-2">
+                      Product Image
+                    </label>
+                    <div className="flex items-start gap-4">
+                      {product.image_url ? (
+                        <img
+                          src={product.image_url}
+                          alt={product.name}
+                          className="w-32 h-32 object-cover rounded-lg border"
+                        />
+                      ) : (
+                        <div className="w-32 h-32 bg-gray-100 rounded-lg border flex flex-col items-center justify-center">
+                          <ImageIcon className="w-10 h-10 text-gray-300" />
+                          <span className="text-xs text-gray-400 mt-1">No image</span>
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-2">
+                        <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
+                          <Upload className="w-4 h-4" />
+                          {product.image_url ? 'Change Photo' : 'Upload Photo'}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleImageUpload(product.id, file, product.image_url);
+                            }}
+                          />
+                        </label>
+                        {product.image_url && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProduct(product.id, { image_url: '' })}
+                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            Remove Photo
+                          </button>
+                        )}
+                        {uploadingImage === product.id && (
+                          <span className="text-sm text-gray-500">Uploading...</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Basic Info */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -795,17 +854,24 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl max-w-sm w-full p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete Product?</h3>
-            <p className="text-gray-600 mb-6">
+            <p className="text-gray-600 mb-4">
               This will permanently delete this product and its pricing. This action cannot be undone.
             </p>
+            {deleteError && (
+              <div className="bg-red-50 text-red-600 px-4 py-2 rounded-lg text-sm mb-4">
+                {deleteError}
+              </div>
+            )}
             <div className="flex justify-end gap-3">
               <button
-                onClick={() => setDeleteConfirm(null)}
+                type="button"
+                onClick={() => { setDeleteConfirm(null); setDeleteError(''); }}
                 className="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={() => handleDeleteProduct(deleteConfirm)}
                 className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
               >
