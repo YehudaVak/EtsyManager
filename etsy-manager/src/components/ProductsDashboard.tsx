@@ -1118,83 +1118,85 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               } ${selectedProducts.has(product.id) ? 'ring-2 ring-orange-400 bg-orange-50/20' : ''}`}
               onClick={() => setSelectedProduct(product)}
             >
-              <div className="flex items-center gap-3 p-3">
-                {/* Checkbox */}
-                <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    checked={selectedProducts.has(product.id)}
-                    onChange={() => toggleSelectProduct(product.id)}
-                    className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer"
-                  />
+              <div className="p-3 space-y-2">
+                {/* Top row: Checkbox + Image + Color/Size/Material + Actions */}
+                <div className="flex items-center gap-3">
+                  {/* Checkbox */}
+                  <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedProducts.has(product.id)}
+                      onChange={() => toggleSelectProduct(product.id)}
+                      className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Image */}
+                  <div className="flex-shrink-0">
+                    {product.image_url ? (
+                      <img src={product.image_url} alt={product.name} className="w-14 h-14 object-cover rounded-lg" />
+                    ) : (
+                      <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center">
+                        <Camera className="w-5 h-5 text-gray-300" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Color, Size, Material */}
+                  <div className="flex-1 min-w-0 grid grid-cols-3 gap-2">
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Color</span>
+                      <span className="block text-sm text-gray-900 truncate">{product.color || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Size</span>
+                      <span className="block text-sm text-gray-900 truncate">{product.size || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Material</span>
+                      <span className="block text-sm text-gray-900 truncate">{product.material || '-'}</span>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProduct(product)}
+                      className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDuplicateProduct(product)}
+                      className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => initiateDelete(product.id)}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
-                {/* Image */}
-                <div className="flex-shrink-0">
-                  {product.image_url ? (
-                    <img src={product.image_url} alt={product.name} className="w-14 h-14 object-cover rounded-lg" />
-                  ) : (
-                    <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center">
-                      <Camera className="w-5 h-5 text-gray-300" />
-                    </div>
+                {/* Product Name (full row) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-semibold text-gray-900 text-sm">{product.name}</h3>
+                  {getStatusBadge(product)}
+                  {product.is_out_of_stock && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-600">OOS</span>
                   )}
                 </div>
 
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-gray-900 text-sm truncate">{product.name}</h3>
-                    {getStatusBadge(product)}
-                    {product.is_out_of_stock && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-600">OOS</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
-                    {product.supplier_name && <span>{product.supplier_name}</span>}
-                    {product.subcategory && (
-                      <>
-                        {product.supplier_name && <span className="text-gray-300">|</span>}
-                        <span>{product.subcategory}</span>
-                      </>
-                    )}
-                  </div>
-                  {/* Pricing */}
-                  {product.pricing && product.pricing.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {product.pricing.map((pricing) => (
-                        <span key={pricing.id} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-50 border border-gray-100 rounded text-[10px]">
-                          <span className="text-gray-500">{pricing.country}</span>
-                          <span className="font-semibold text-gray-800">{formatCurrency(pricing.price)}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProduct(product)}
-                    className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDuplicateProduct(product)}
-                    className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => initiateDelete(product.id)}
-                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                {/* Description */}
+                {product.description && (
+                  <p className="text-xs text-gray-500 line-clamp-2">{product.description}</p>
+                )}
               </div>
             </div>
           ))
