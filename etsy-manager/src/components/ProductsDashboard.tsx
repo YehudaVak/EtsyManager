@@ -1193,10 +1193,6 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                   )}
                 </div>
 
-                {/* Description */}
-                {product.description && (
-                  <p className="text-xs text-gray-500 line-clamp-2">{product.description}</p>
-                )}
               </div>
             </div>
           ))
@@ -1393,8 +1389,8 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
-              {/* Status + Etsy Pricing */}
-              <div className="grid grid-cols-4 gap-4">
+              {/* Status + Pricing */}
+              <div className="grid grid-cols-5 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
                   <select
@@ -1424,6 +1420,12 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     onChange={(v) => handleUpdateProduct(selectedProduct.id, { sale_percent: Number(v) || 0 })}
                     step="1"
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Supplier $</label>
+                  <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-900">
+                    {getUSPrice(selectedProduct)}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Profit</label>
