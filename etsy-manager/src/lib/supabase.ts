@@ -151,6 +151,17 @@ export interface Product {
   description?: string;
   image_url?: string;
   product_link?: string;
+  supplier_link?: string;
+  subcategory?: string;
+
+  // Product Details
+  size?: string;
+  color?: string;
+  material?: string;
+
+  // Etsy Pricing
+  etsy_full_price?: number;
+  sale_percent?: number;
 
   // Variants
   variants?: string;
@@ -159,6 +170,7 @@ export interface Product {
   supplier_name?: string;
 
   // Status
+  product_status?: string; // 'active' | 'to_quote' | 'quotation_received'
   is_active: boolean;
   is_out_of_stock?: boolean;
 
@@ -180,7 +192,23 @@ export interface ProductPricing {
   updated_at?: string;
 }
 
-// Product with pricing for display
+// Product variation (e.g., Blue Teapot, Green Teapot)
+export interface ProductVariation {
+  id: string;
+  product_id: string;
+  name: string;
+  image_url?: string;
+  color?: string;
+  size?: string;
+  material?: string;
+  price?: number;
+  shipping_time?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Product with pricing and variations
 export interface ProductWithPricing extends Product {
   pricing?: ProductPricing[];
+  variations?: ProductVariation[];
 }

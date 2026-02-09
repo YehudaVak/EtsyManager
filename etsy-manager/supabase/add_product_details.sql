@@ -1,0 +1,9 @@
+-- Add new columns to products table
+ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier_link TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS size TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS color TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS material TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS subcategory TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS product_status TEXT DEFAULT 'active';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS etsy_full_price DECIMAL(10, 2);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_percent DECIMAL(5, 2) DEFAULT 30;

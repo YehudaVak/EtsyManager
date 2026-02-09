@@ -6,7 +6,7 @@ import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supab
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
 import StoreSelector from './StoreSelector';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, LogOut, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag } from 'lucide-react';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, LogOut, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload } from 'lucide-react';
 import Link from 'next/link';
 import EditableField from './EditableField';
 
@@ -33,6 +33,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     key: 'ordered_date',
     direction: 'desc'
   });
+
+  // Multi-select state
+  const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
   // Filter state for supplier status tabs
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'out_of_stock'>('all');
@@ -163,6 +167,48 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     }
   };
 
+  // Multi-select functions
+  const toggleSelectOrder = (orderId: string) => {
+    setSelectedOrders(prev => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedOrders.size === filteredOrders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(filteredOrders.map(o => o.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedOrders(new Set());
+
+  const handleBulkDelete = async () => {
+    try {
+      const ids = Array.from(selectedOrders);
+      const { error } = await supabase
+        .from('orders')
+        .delete()
+        .in('id', ids);
+
+      if (error) throw error;
+      setOrders(prev => prev.filter(o => !selectedOrders.has(o.id)));
+      setSelectedOrders(new Set());
+      setBulkDeleteConfirm(false);
+    } catch (error) {
+      console.error('Error deleting orders:', error);
+      alert('Failed to delete some orders. Please try again.');
+      setBulkDeleteConfirm(false);
+    }
+  };
+
   const openDeleteConfirm = (order: Order) => {
     setDeleteConfirm({
       show: true,
@@ -236,6 +282,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       setOrders(prev => prev.map(o =>
         o.id === orderId ? { ...o, ...updates } : o
       ));
+      // Also update selectedOrder if it's the same order
+      if (selectedOrder && selectedOrder.id === orderId) {
+        setSelectedOrder({ ...selectedOrder, ...updates });
+      }
     } catch (error) {
       console.error('Error selecting product:', error);
     }
@@ -752,6 +802,32 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         </div>
       </div>
 
+      {/* Bulk Actions Bar */}
+      {isAdmin && selectedOrders.size > 0 && (
+        <div className="mx-4 mt-3 flex items-center gap-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl">
+          <CheckSquare className="w-5 h-5 text-orange-600" />
+          <span className="text-sm font-medium text-orange-800">
+            {selectedOrders.size} order{selectedOrders.size > 1 ? 's' : ''} selected
+          </span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkDeleteConfirm(true)}
+            className="px-3 py-1.5 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors flex items-center gap-1.5"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete Selected
+          </button>
+        </div>
+      )}
+
       {/* Desktop Table View - Simplified */}
       <div className="hidden lg:block p-4">
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
@@ -760,6 +836,17 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               {/* Table Header */}
               <thead>
                 <tr style={{ backgroundColor: BRAND_ORANGE }}>
+                  {/* Select All Checkbox */}
+                  {isAdmin && (
+                    <th className="px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: 40 }}>
+                      <input
+                        type="checkbox"
+                        checked={filteredOrders.length > 0 && selectedOrders.size === filteredOrders.length}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border-white/50 text-white focus:ring-white cursor-pointer accent-white"
+                      />
+                    </th>
+                  )}
                   {/* Row Number */}
                   <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.rowNum }}>
                     #
@@ -978,7 +1065,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               <tbody>
                 {filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 16 : 15} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={isAdmin ? 17 : 15} className="px-4 py-12 text-center text-gray-500">
                       No orders yet.{' '}
                       <button onClick={handleAddOrder} className="text-[#d96f36] hover:underline font-medium">
                         Create your first order
@@ -989,13 +1076,24 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   filteredOrders.map((order, index) => (
                     <tr
                       key={order.id}
-                      className={`border-b-2 border-gray-200 hover:bg-orange-50 cursor-pointer transition-colors relative group ${isNewOrder(order) ? 'bg-orange-50/50' : ''}`}
+                      className={`border-b-2 border-gray-200 hover:bg-orange-50 cursor-pointer transition-colors relative group ${isNewOrder(order) ? 'bg-orange-50/50' : ''} ${selectedOrders.has(order.id) ? 'bg-orange-100' : ''}`}
                       style={{ height: rowHeights[order.id] || defaultRowHeight }}
                       onClick={() => {
                         setSelectedOrder(order);
                         acknowledgeOrder(order);
                       }}
                     >
+                      {/* Row Checkbox */}
+                      {isAdmin && (
+                        <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedOrders.has(order.id)}
+                            onChange={() => toggleSelectOrder(order.id)}
+                            className={checkboxStyle}
+                          />
+                        </td>
+                      )}
                       {/* Row number */}
                       <td className="px-3 py-3 text-center text-sm font-medium text-gray-600 border-r border-gray-100 relative">
                         {index + 1}
@@ -1032,12 +1130,31 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       </td>
                       {/* Image */}
                       <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative w-12 h-12 mx-auto">
+                        <div className="relative w-12 h-12 mx-auto group/img">
                           {order.image_url ? (
                             <img src={order.image_url} alt="" className="w-12 h-12 object-cover rounded" />
                           ) : (
-                            <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center">
+                            <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300">
                               <Camera className="w-4 h-4 text-gray-400" />
+                            </div>
+                          )}
+                          <label className="absolute inset-0 cursor-pointer rounded overflow-hidden">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleImageUpload(order.id, file, order.image_url);
+                              }}
+                            />
+                            <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-colors flex items-center justify-center">
+                              <Camera className="w-4 h-4 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" />
+                            </div>
+                          </label>
+                          {uploadingImage === order.id && (
+                            <div className="absolute inset-0 bg-black/50 rounded flex items-center justify-center">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                             </div>
                           )}
                         </div>
@@ -1661,6 +1778,43 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         </div>
       )}
 
+      {/* Bulk Delete Confirmation Modal */}
+      {bulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Delete {selectedOrders.size} Orders?</h3>
+              <button
+                onClick={() => setBulkDeleteConfirm(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete <strong className="text-gray-900">{selectedOrders.size} order{selectedOrders.size > 1 ? 's' : ''}</strong>?
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirm(false)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                className="px-4 py-2 text-white bg-red-500 hover:bg-red-600 rounded-lg font-medium transition-colors"
+              >
+                Delete {selectedOrders.size} Orders
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Order Detail Card Modal */}
       {selectedOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedOrder(null)}>
@@ -1683,20 +1837,71 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
             {/* Modal Content */}
             <div className="p-6 space-y-6">
-              {/* Image and Basic Info */}
-              <div className="flex gap-6">
+              {/* Top Row: Order Date + Etsy Order # */}
+              <div className="flex items-end gap-4">
+                <div className="w-32">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Order Date</label>
+                  <EditableField
+                    type="date"
+                    value={selectedOrder.ordered_date || ''}
+                    onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ordered_date', v)}
+                  />
+                </div>
+                <div className="w-40">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Etsy Order #</label>
+                  <EditableField
+                    value={selectedOrder.etsy_order_no || ''}
+                    onChange={(v) => handleFieldUpdate(selectedOrder.id, 'etsy_order_no', v)}
+                    placeholder="Enter order number"
+                  />
+                </div>
+                {/* Product Catalog Selector - compact */}
+                {products.length > 0 && (
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-blue-600 mb-1">
+                      <ShoppingBag className="w-3 h-3 inline mr-1" />
+                      From Catalog
+                    </label>
+                    <select
+                      value={selectedOrder.product_id || ''}
+                      onChange={(e) => handleSelectProduct(selectedOrder.id, e.target.value)}
+                      className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Select product...</option>
+                      {products.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.name}
+                          {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* Image + Product Name + Customer + Supplier */}
+              <div className="flex gap-5">
                 {/* Image Upload */}
                 <div className="flex-shrink-0">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Product Image</label>
-                  <div className="relative w-32 h-32">
+                  <div className="relative w-28 h-28">
                     {selectedOrder.image_url ? (
-                      <img src={selectedOrder.image_url} alt="" className="w-32 h-32 object-cover rounded-xl" />
+                      <img src={selectedOrder.image_url} alt="" className="w-28 h-28 object-cover rounded-xl" />
                     ) : (
-                      <div className="w-32 h-32 bg-gray-100 rounded-xl flex items-center justify-center border-2 border-dashed border-gray-300">
-                        <Camera className="w-8 h-8 text-gray-400" />
+                      <div className="w-28 h-28 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
+                        <Camera className="w-7 h-7 text-gray-300" />
+                        <span className="text-[10px] text-gray-400 mt-1">No image</span>
                       </div>
                     )}
-                    <label className="absolute inset-0 cursor-pointer hover:bg-black/10 rounded-xl transition-colors flex items-center justify-center">
+                    {uploadingImage === selectedOrder.id && (
+                      <div className="absolute inset-0 bg-black/50 rounded-xl flex items-center justify-center">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-1 mt-2">
+                    <label className="cursor-pointer inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
+                      <Upload className="w-3 h-3" />
+                      {selectedOrder.image_url ? 'Change' : 'Upload'}
                       <input
                         type="file"
                         accept="image/*"
@@ -1706,65 +1911,27 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                           if (file) handleImageUpload(selectedOrder.id, file, selectedOrder.image_url);
                         }}
                       />
-                      <span className="text-xs text-gray-500 bg-white/90 px-2 py-1 rounded opacity-0 hover:opacity-100 transition-opacity">
-                        Click to upload
-                      </span>
                     </label>
-                    {uploadingImage === selectedOrder.id && (
-                      <div className="absolute inset-0 bg-black/50 rounded-xl flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-                      </div>
+                    {selectedOrder.image_url && (
+                      <button
+                        type="button"
+                        onClick={() => handleFieldUpdate(selectedOrder.id, 'image_url', '')}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     )}
                   </div>
                 </div>
 
-                {/* Product Selector */}
-                {products.length > 0 && (
-                  <div className="flex-1 bg-blue-50 rounded-lg p-3 border border-blue-200 mb-4">
-                    <label className="block text-sm font-medium text-blue-800 mb-1">
-                      <ShoppingBag className="w-4 h-4 inline mr-1" />
-                      Select from Products Catalog
-                    </label>
-                    <select
-                      value={selectedOrder.product_id || ''}
-                      onChange={(e) => handleSelectProduct(selectedOrder.id, e.target.value)}
-                      className="w-full px-3 py-2 border border-blue-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">-- Select a product to auto-fill --</option>
-                      {products.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name} {product.variants ? `(${product.variants})` : ''}
-                          {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Basic Fields */}
-                <div className="flex-1 grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Order Date</label>
-                    <EditableField
-                      type="date"
-                      value={selectedOrder.ordered_date || ''}
-                      onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ordered_date', v)}
-                    />
-                  </div>
+                {/* Main Fields: Product Name, Customer, Supplier */}
+                <div className="flex-1 space-y-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
                     <EditableField
                       value={selectedOrder.product_name || ''}
                       onChange={(v) => handleFieldUpdate(selectedOrder.id, 'product_name', v)}
                       placeholder="Enter product name"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Order #</label>
-                    <EditableField
-                      value={selectedOrder.etsy_order_no || ''}
-                      onChange={(v) => handleFieldUpdate(selectedOrder.id, 'etsy_order_no', v)}
-                      placeholder="Enter order number"
                     />
                   </div>
                   <div>
