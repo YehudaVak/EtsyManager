@@ -609,16 +609,26 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     return `$${value.toFixed(2)}`;
   };
 
-  const getUSPrice = (product: ProductWithPricing) => {
-    const us = product.pricing?.find(p => p.country === 'US');
-    return us ? formatCurrency(us.price) : '-';
+  const getSupplierPrice = (product: ProductWithPricing) => {
+    return product.supplier_price ? formatCurrency(product.supplier_price) : '-';
+  };
+
+  const getAfterSalePrice = (product: ProductWithPricing) => {
+    if (!product.etsy_full_price) return null;
+    return product.etsy_full_price * (1 - (product.sale_percent ?? 30) / 100);
+  };
+
+  const getEtsyCommission = (product: ProductWithPricing) => {
+    const afterSale = getAfterSalePrice(product);
+    if (afterSale === null) return null;
+    return afterSale * 0.12;
   };
 
   const getProfit = (product: ProductWithPricing) => {
-    if (!product.etsy_full_price) return '-';
-    const afterSale = product.etsy_full_price * (1 - (product.sale_percent ?? 30) / 100);
-    const usPrice = product.pricing?.find(p => p.country === 'US')?.price || 0;
-    const profit = afterSale - usPrice;
+    if (!product.etsy_full_price || !product.supplier_price) return '-';
+    const afterSale = getAfterSalePrice(product)!;
+    const commission = getEtsyCommission(product)!;
+    const profit = afterSale - commission - product.supplier_price;
     return profit;
   };
 
@@ -1013,7 +1023,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </td>
                       {/* US Price */}
                       <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
-                        {getUSPrice(product)}
+                        {getSupplierPrice(product)}
                       </td>
                       {/* Profit */}
                       <td className="px-3 text-sm text-center border-r border-gray-100">
@@ -1205,8 +1215,8 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 {/* Prices */}
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-gray-500">Etsy: <span className="font-semibold text-gray-900">${product.etsy_full_price || '-'}</span></span>
-                  <span className="text-xs text-gray-500">Etsy ({product.sale_percent ?? 30}%): <span className="font-semibold text-gray-900">{product.etsy_full_price ? `$${(product.etsy_full_price * (1 - (product.sale_percent ?? 30) / 100)).toFixed(2)}` : '-'}</span></span>
-                  <span className="text-xs text-gray-500">Supplier: <span className="font-semibold text-gray-900">{getUSPrice(product)}</span></span>
+                  <span className="text-xs text-gray-500">After Sale: <span className="font-semibold text-gray-900">{(() => { const a = getAfterSalePrice(product); return a !== null ? `$${a.toFixed(2)}` : '-'; })()}</span></span>
+                  <span className="text-xs text-gray-500">Supplier: <span className="font-semibold text-gray-900">{getSupplierPrice(product)}</span></span>
                   <span className="text-xs text-gray-500">Profit: <span className={`font-semibold ${(() => { const p = getProfit(product); return p === '-' ? 'text-gray-400' : (p as number) >= 0 ? 'text-green-700' : 'text-red-500'; })()}`}>{formatProfit(product)}</span></span>
                 </div>
 
@@ -1233,258 +1243,427 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="sticky top-0 z-10 px-6 py-4 border-b flex items-center justify-between" style={{ backgroundColor: BRAND_ORANGE }}>
-              <h2 className="text-xl font-bold text-white truncate">
+            <div className="sticky top-0 z-10 px-6 py-3 border-b flex items-start justify-between gap-3" style={{ backgroundColor: BRAND_ORANGE }}>
+              <h2 className="text-base font-semibold text-white line-clamp-2 min-w-0">
                 {selectedProduct.name || 'Product Details'}
               </h2>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <button
                   onClick={() => setSelectedProduct(null)}
-                  className="px-4 py-2 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors"
+                  className="px-4 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors"
                 >
                   Save
                 </button>
                 <button
                   onClick={() => setSelectedProduct(null)}
-                  className="p-2 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
+                  className="p-1.5 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
 
             {/* Modal Content */}
-            <div className="p-6 space-y-6">
-              {/* Image + Status/Product Name (desktop: side by side) */}
-              <div className="flex gap-5">
-                {/* Image Upload */}
-                <div className="flex-shrink-0">
-                  <div className="relative w-40 h-40">
-                    {selectedProduct.image_url ? (
-                      <img
-                        src={selectedProduct.image_url}
-                        alt=""
-                        className="w-40 h-40 object-cover rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => setEnlargedImage(selectedProduct.image_url!)}
-                      />
-                    ) : (
-                      <div className="w-40 h-40 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
-                        <Camera className="w-8 h-8 text-gray-300" />
-                        <span className="text-xs text-gray-400 mt-1">No image</span>
-                      </div>
-                    )}
-                    {uploadingImage === selectedProduct.id && (
-                      <div className="absolute inset-0 bg-black/50 rounded-xl flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                      </div>
-                    )}
+            <div className="p-4 sm:p-6 space-y-5">
+
+              {/* ── SECTION: Product Info ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+                <EditableField
+                  value={selectedProduct.name || ''}
+                  onChange={(v) => handleUpdateProduct(selectedProduct.id, { name: String(v) })}
+                  placeholder="Product Name"
+                  className="!text-sm !font-semibold !text-gray-800 !border-transparent !px-1 !py-0.5 hover:!border-gray-300 focus:!border-[#d96f36]"
+                />
+
+                {/* Image + Status/Color/Size/Material */}
+                <div className="flex flex-col sm:flex-row gap-4 items-start">
+                  {/* Image Upload */}
+                  <div className="flex-shrink-0 self-center sm:self-start">
+                    <div className="relative w-32 h-32 sm:w-40 sm:h-40">
+                      {selectedProduct.image_url ? (
+                        <img
+                          src={selectedProduct.image_url}
+                          alt=""
+                          className="w-32 h-32 sm:w-40 sm:h-40 object-cover rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
+                          onClick={() => setEnlargedImage(selectedProduct.image_url!)}
+                        />
+                      ) : (
+                        <div className="w-32 h-32 sm:w-40 sm:h-40 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
+                          <Camera className="w-8 h-8 text-gray-300" />
+                          <span className="text-xs text-gray-400 mt-1">No image</span>
+                        </div>
+                      )}
+                      {uploadingImage === selectedProduct.id && (
+                        <div className="absolute inset-0 bg-black/50 rounded-xl flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-3 mt-3">
+                      <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
+                        <Upload className="w-4 h-4" />
+                        {selectedProduct.image_url ? 'Change' : 'Upload'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleImageUpload(selectedProduct.id, file);
+                          }}
+                        />
+                      </label>
+                      {selectedProduct.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateProduct(selectedProduct.id, { image_url: '' })}
+                          className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex gap-3 mt-3">
-                    <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
-                      <Upload className="w-4 h-4" />
-                      {selectedProduct.image_url ? 'Change' : 'Upload'}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleImageUpload(selectedProduct.id, file);
-                        }}
-                      />
-                    </label>
-                    {selectedProduct.image_url && (
-                      <button
-                        type="button"
-                        onClick={() => handleUpdateProduct(selectedProduct.id, { image_url: '' })}
-                        className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+
+                  {/* 6 fields: 2 columns x 3 rows on desktop, single column on mobile */}
+                  <div className="flex-1 grid grid-cols-2 gap-x-3 gap-y-1">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Status</label>
+                      <select
+                        value={selectedProduct.product_status || 'active'}
+                        onChange={(e) => handleUpdateProduct(selectedProduct.id, { product_status: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
                       >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
+                        {PRODUCT_STATUSES.map(s => (
+                          <option key={s.value} value={s.value}>{s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Color</label>
+                      <EditableField
+                        value={selectedProduct.color || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { color: String(v) })}
+                        placeholder="e.g., Blue"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Subcategory</label>
+                      <EditableField
+                        value={selectedProduct.subcategory || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { subcategory: String(v) })}
+                        placeholder="e.g., Home Decor"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Size</label>
+                      <EditableField
+                        value={selectedProduct.size || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { size: String(v) })}
+                        placeholder="e.g., Large"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Supplier Name</label>
+                      <EditableField
+                        value={selectedProduct.supplier_name || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_name: String(v) })}
+                        placeholder="Enter supplier"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Material</label>
+                      <EditableField
+                        value={selectedProduct.material || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { material: String(v) })}
+                        placeholder="e.g., Ceramic"
+                      />
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                {/* Status + Product Name */}
-                <div className="flex-1 space-y-3">
+              {/* ── SECTION: Pricing ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+                <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing</h3>
+
+                {/* My Pricing - row 1: editable fields, row 2: calculated fields */}
+                <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select
-                      value={selectedProduct.product_status || 'active'}
-                      onChange={(e) => handleUpdateProduct(selectedProduct.id, { product_status: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
-                    >
-                      {PRODUCT_STATUSES.map(s => (
-                        <option key={s.value} value={s.value}>{s.label}</option>
-                      ))}
-                    </select>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Price</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 font-medium">$</span>
+                      <EditableField
+                        type="number"
+                        value={selectedProduct.etsy_full_price || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { etsy_full_price: Number(v) || 0 })}
+                        placeholder="0.00"
+                        className="pl-7"
+                      />
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
-                    <EditableField
-                      value={selectedProduct.name || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { name: String(v) })}
-                      placeholder="Enter product name"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Color, Size, Material */}
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
-                  <EditableField
-                    value={selectedProduct.color || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { color: String(v) })}
-                    placeholder="e.g., Blue"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
-                  <EditableField
-                    value={selectedProduct.size || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { size: String(v) })}
-                    placeholder="e.g., Large"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Material</label>
-                  <EditableField
-                    value={selectedProduct.material || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { material: String(v) })}
-                    placeholder="e.g., Ceramic"
-                  />
-                </div>
-              </div>
-
-              {/* Subcategory + Supplier Name (side by side) */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Subcategory</label>
-                  <EditableField
-                    value={selectedProduct.subcategory || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { subcategory: String(v) })}
-                    placeholder="e.g., Home Decor"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Name</label>
-                  <EditableField
-                    value={selectedProduct.supplier_name || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_name: String(v) })}
-                    placeholder="Enter supplier"
-                  />
-                </div>
-              </div>
-
-              {/* Pricing */}
-              <div className="grid grid-cols-4 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Price</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 font-medium">$</span>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Sale %</label>
                     <EditableField
                       type="number"
-                      value={selectedProduct.etsy_full_price || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { etsy_full_price: Number(v) || 0 })}
-                      placeholder="0.00"
-                      className="pl-7"
+                      value={selectedProduct.sale_percent ?? 30}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { sale_percent: Number(v) || 0 })}
+                      step="1"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Supplier Price</label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">$</span>
+                      <EditableField
+                        type="number"
+                        value={selectedProduct.supplier_price || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_price: parseFloat(String(v)) || 0 })}
+                        placeholder="0.00"
+                        className="pl-7"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">After Sale</label>
+                    <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                      {(() => {
+                        const afterSale = getAfterSalePrice(selectedProduct);
+                        return afterSale !== null ? `$${afterSale.toFixed(2)}` : '-';
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Fee (12%)</label>
+                    <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-red-500">
+                      {(() => {
+                        const commission = getEtsyCommission(selectedProduct);
+                        return commission !== null ? `-$${commission.toFixed(2)}` : '-';
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Profit $</label>
+                    <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                      (() => {
+                        const p = getProfit(selectedProduct);
+                        return p === '-' ? 'text-gray-400' : (p as number) >= 0 ? 'text-green-700' : 'text-red-500';
+                      })()
+                    }`}>
+                      {formatProfit(selectedProduct)}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Profit %</label>
+                    <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                      (() => {
+                        const p = getProfit(selectedProduct);
+                        if (p === '-') return 'text-gray-400';
+                        const afterSale = getAfterSalePrice(selectedProduct);
+                        if (!afterSale) return 'text-gray-400';
+                        return (p as number) >= 0 ? 'text-green-700' : 'text-red-500';
+                      })()
+                    }`}>
+                      {(() => {
+                        const p = getProfit(selectedProduct);
+                        if (p === '-') return '-';
+                        const afterSale = getAfterSalePrice(selectedProduct);
+                        if (!afterSale) return '-';
+                        return `${(((p as number) / afterSale) * 100).toFixed(0)}%`;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Competitor Pricing */}
+                <div className="border-t border-gray-100 pt-3">
+                  <label className="block text-xs font-medium text-gray-500 mb-2 uppercase">Competitor</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Price $</label>
+                      <EditableField
+                        type="number"
+                        value={selectedProduct.competitor_price || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { competitor_price: Number(v) || 0 })}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Shipment $</label>
+                      <EditableField
+                        type="number"
+                        value={selectedProduct.competitor_shipment || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { competitor_shipment: Number(v) || 0 })}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Total $</label>
+                      <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-900">
+                        {(selectedProduct.competitor_price || selectedProduct.competitor_shipment)
+                          ? `$${((selectedProduct.competitor_price || 0) + (selectedProduct.competitor_shipment || 0)).toFixed(2)}`
+                          : '-'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── SECTION: Links ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Links</h3>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">1688 Link</label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <EditableField
+                        value={selectedProduct.supplier_link || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_link: String(v) })}
+                        placeholder="https://detail.1688.com/..."
+                      />
+                    </div>
+                    {selectedProduct.supplier_link && (
+                      <a href={selectedProduct.supplier_link} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-500 hover:bg-blue-600">
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">AliExpress Link</label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <EditableField
+                        value={selectedProduct.ali_link || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { ali_link: String(v) })}
+                        placeholder="https://aliexpress.com/..."
+                      />
+                    </div>
+                    {selectedProduct.ali_link && (
+                      <a href={selectedProduct.ali_link} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-red-500 hover:bg-red-600">
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Link</label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <EditableField
+                        value={selectedProduct.product_link || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { product_link: String(v) })}
+                        placeholder="https://www.etsy.com/listing/..."
+                      />
+                    </div>
+                    {selectedProduct.product_link && (
+                      <a href={selectedProduct.product_link} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── SECTION: Store / Competitor Research ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Store / Competitor Research</h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Store Name</label>
+                    <EditableField
+                      value={selectedProduct.store_name || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { store_name: String(v) })}
+                      placeholder="Competitor store name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Store Link</label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <EditableField
+                          value={selectedProduct.store_link || ''}
+                          onChange={(v) => handleUpdateProduct(selectedProduct.id, { store_link: String(v) })}
+                          placeholder="https://www.etsy.com/shop/..."
+                        />
+                      </div>
+                      {selectedProduct.store_link && (
+                        <a href={selectedProduct.store_link} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-gray-500 hover:bg-gray-600">
+                          <ExternalLink className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Sales</label>
+                    <EditableField
+                      value={selectedProduct.weekly_monthly_sales || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { weekly_monthly_sales: String(v) })}
+                      placeholder="e.g., 50/week"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Store Age</label>
+                    <EditableField
+                      value={selectedProduct.store_age || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { store_age: String(v) })}
+                      placeholder="e.g., 3 years"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Competitors</label>
+                    <EditableField
+                      value={selectedProduct.competitors || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { competitors: String(v) })}
+                      placeholder="e.g., 12"
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* ── SECTION: Notes ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Notes</h3>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Sale %</label>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Product Description</label>
                   <EditableField
-                    type="number"
-                    value={selectedProduct.sale_percent ?? 30}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { sale_percent: Number(v) || 0 })}
-                    step="1"
+                    type="textarea"
+                    value={selectedProduct.description || ''}
+                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { description: String(v) })}
+                    placeholder="Product description..."
+                    rows={3}
                   />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Supplier $</label>
-                  <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-900">
-                    {getUSPrice(selectedProduct)}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Profit</label>
-                  <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
-                    (() => {
-                      const p = getProfit(selectedProduct);
-                      return p === '-' ? 'text-gray-400' : (p as number) >= 0 ? 'text-green-700' : 'text-red-500';
-                    })()
-                  }`}>
-                    {formatProfit(selectedProduct)}
-                  </div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Remarks</label>
+                  <EditableField
+                    type="textarea"
+                    value={selectedProduct.remarks || ''}
+                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { remarks: String(v) })}
+                    placeholder="Notes, comments..."
+                    rows={2}
+                  />
                 </div>
               </div>
 
-              {/* 1688 Link */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">1688 Link</label>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <EditableField
-                      value={selectedProduct.supplier_link || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_link: String(v) })}
-                      placeholder="https://detail.1688.com/..."
-                    />
-                  </div>
-                  {selectedProduct.supplier_link && (
-                    <a
-                      href={selectedProduct.supplier_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-500 hover:bg-blue-600"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  )}
-                </div>
-              </div>
-
-              {/* Etsy Link */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Link</label>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <EditableField
-                      value={selectedProduct.product_link || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { product_link: String(v) })}
-                      placeholder="https://www.etsy.com/listing/..."
-                    />
-                  </div>
-                  {selectedProduct.product_link && (
-                    <a
-                      href={selectedProduct.product_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white"
-                      style={{ backgroundColor: BRAND_ORANGE }}
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  )}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                <EditableField
-                  type="textarea"
-                  value={selectedProduct.description || ''}
-                  onChange={(v) => handleUpdateProduct(selectedProduct.id, { description: String(v) })}
-                  placeholder="Product description..."
-                  rows={3}
-                />
-              </div>
-
-              {/* Country Pricing */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Pricing by Country</label>
+              {/* ── SECTION: Country Pricing ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing by Country</h3>
                 <div className="space-y-2">
                   {COUNTRIES.map((country) => {
                     const pricing = selectedProduct.pricing?.find((p) => p.country === country);
@@ -1526,19 +1705,21 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
-              {/* Out of Stock Toggle */}
-              <div className={`rounded-lg p-3 border ${selectedProduct.is_out_of_stock ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className={`w-5 h-5 ${selectedProduct.is_out_of_stock ? 'text-red-500' : 'text-gray-400'}`} />
-                    <span className="font-medium text-gray-900">Out of Stock</span>
+              {/* ── SECTION: Stock Status ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className={`rounded-lg p-3 border ${selectedProduct.is_out_of_stock ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className={`w-5 h-5 ${selectedProduct.is_out_of_stock ? 'text-red-500' : 'text-gray-400'}`} />
+                      <span className="font-medium text-gray-900">Out of Stock</span>
+                    </div>
+                    <button
+                      onClick={() => handleUpdateProduct(selectedProduct.id, { is_out_of_stock: !selectedProduct.is_out_of_stock })}
+                      className={`relative w-12 h-6 rounded-full transition-colors ${selectedProduct.is_out_of_stock ? 'bg-red-500' : 'bg-gray-300'}`}
+                    >
+                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${selectedProduct.is_out_of_stock ? 'left-7' : 'left-1'}`} />
+                    </button>
                   </div>
-                  <button
-                    onClick={() => handleUpdateProduct(selectedProduct.id, { is_out_of_stock: !selectedProduct.is_out_of_stock })}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${selectedProduct.is_out_of_stock ? 'bg-red-500' : 'bg-gray-300'}`}
-                  >
-                    <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${selectedProduct.is_out_of_stock ? 'left-7' : 'left-1'}`} />
-                  </button>
                 </div>
               </div>
             </div>

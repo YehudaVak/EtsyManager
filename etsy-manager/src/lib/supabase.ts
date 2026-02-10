@@ -168,6 +168,18 @@ export interface Product {
 
   // Supplier Info
   supplier_name?: string;
+  supplier_price?: number;
+
+  // Competitor / Store Research
+  store_link?: string;
+  store_name?: string;
+  weekly_monthly_sales?: string;
+  store_age?: string;
+  competitors?: string;
+  ali_link?: string;
+  competitor_price?: number;
+  competitor_shipment?: number;
+  remarks?: string;
 
   // Status
   product_status?: string; // 'active' | 'to_quote' | 'quotation_received'
