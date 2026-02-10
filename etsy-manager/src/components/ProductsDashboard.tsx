@@ -38,7 +38,15 @@ const PRODUCT_STATUSES = [
 ];
 
 // Common countries for pricing
-const COUNTRIES = ['US', 'UK/GB', 'EU', 'CA', 'AU', 'Other'];
+const COUNTRIES = ['US', 'UK/GB', 'DE', 'CA', 'AU', 'Other'];
+const COUNTRY_LABELS: Record<string, string> = {
+  'US': 'United States (US)',
+  'UK/GB': 'United Kingdom (UK)',
+  'DE': 'Germany (DE)',
+  'CA': 'Canada (CA)',
+  'AU': 'Australia (AU)',
+  'Other': 'Other',
+};
 
 interface ProductsDashboardProps {
   isAdmin?: boolean;
@@ -65,6 +73,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
 
   // Sort
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'desc' });
@@ -1193,6 +1202,14 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                   )}
                 </div>
 
+                {/* Prices */}
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500">Etsy: <span className="font-semibold text-gray-900">${product.etsy_full_price || '-'}</span></span>
+                  <span className="text-xs text-gray-500">Etsy ({product.sale_percent ?? 30}%): <span className="font-semibold text-gray-900">{product.etsy_full_price ? `$${(product.etsy_full_price * (1 - (product.sale_percent ?? 30) / 100)).toFixed(2)}` : '-'}</span></span>
+                  <span className="text-xs text-gray-500">Supplier: <span className="font-semibold text-gray-900">{getUSPrice(product)}</span></span>
+                  <span className="text-xs text-gray-500">Profit: <span className={`font-semibold ${(() => { const p = getProfit(product); return p === '-' ? 'text-gray-400' : (p as number) >= 0 ? 'text-green-700' : 'text-red-500'; })()}`}>{formatProfit(product)}</span></span>
+                </div>
+
               </div>
             </div>
           ))
@@ -1238,17 +1255,22 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
             {/* Modal Content */}
             <div className="p-6 space-y-6">
-              {/* Image + Product Name + Supplier */}
+              {/* Image + Status/Product Name (desktop: side by side) */}
               <div className="flex gap-5">
                 {/* Image Upload */}
                 <div className="flex-shrink-0">
-                  <div className="relative w-28 h-28">
+                  <div className="relative w-40 h-40">
                     {selectedProduct.image_url ? (
-                      <img src={selectedProduct.image_url} alt="" className="w-28 h-28 object-cover rounded-xl" />
+                      <img
+                        src={selectedProduct.image_url}
+                        alt=""
+                        className="w-40 h-40 object-cover rounded-xl cursor-pointer hover:opacity-90 transition-opacity"
+                        onClick={() => setEnlargedImage(selectedProduct.image_url!)}
+                      />
                     ) : (
-                      <div className="w-28 h-28 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
-                        <Camera className="w-7 h-7 text-gray-300" />
-                        <span className="text-[10px] text-gray-400 mt-1">No image</span>
+                      <div className="w-40 h-40 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
+                        <Camera className="w-8 h-8 text-gray-300" />
+                        <span className="text-xs text-gray-400 mt-1">No image</span>
                       </div>
                     )}
                     {uploadingImage === selectedProduct.id && (
@@ -1257,9 +1279,9 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-1 mt-2">
-                    <label className="cursor-pointer inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
-                      <Upload className="w-3 h-3" />
+                  <div className="flex gap-3 mt-3">
+                    <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: BRAND_ORANGE }}>
+                      <Upload className="w-4 h-4" />
                       {selectedProduct.image_url ? 'Change' : 'Upload'}
                       <input
                         type="file"
@@ -1275,16 +1297,28 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       <button
                         type="button"
                         onClick={() => handleUpdateProduct(selectedProduct.id, { image_url: '' })}
-                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
+                        className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 transition-colors"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     )}
                   </div>
                 </div>
 
-                {/* Main Fields */}
+                {/* Status + Product Name */}
                 <div className="flex-1 space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select
+                      value={selectedProduct.product_status || 'active'}
+                      onChange={(e) => handleUpdateProduct(selectedProduct.id, { product_status: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
+                    >
+                      {PRODUCT_STATUSES.map(s => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
                     <EditableField
@@ -1293,41 +1327,25 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       placeholder="Enter product name"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Name</label>
-                    <EditableField
-                      value={selectedProduct.supplier_name || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_name: String(v) })}
-                      placeholder="Enter supplier"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Subcategory</label>
-                    <EditableField
-                      value={selectedProduct.subcategory || ''}
-                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { subcategory: String(v) })}
-                      placeholder="e.g., Home Decor"
-                    />
-                  </div>
                 </div>
               </div>
 
-              {/* Size, Color, Material */}
+              {/* Color, Size, Material */}
               <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
-                  <EditableField
-                    value={selectedProduct.size || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { size: String(v) })}
-                    placeholder="e.g., Large"
-                  />
-                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
                   <EditableField
                     value={selectedProduct.color || ''}
                     onChange={(v) => handleUpdateProduct(selectedProduct.id, { color: String(v) })}
                     placeholder="e.g., Blue"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Size</label>
+                  <EditableField
+                    value={selectedProduct.size || ''}
+                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { size: String(v) })}
+                    placeholder="e.g., Large"
                   />
                 </div>
                 <div>
@@ -1340,77 +1358,40 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
-              {/* Links */}
+              {/* Subcategory + Supplier Name (side by side) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">1688 Link</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <EditableField
-                        value={selectedProduct.supplier_link || ''}
-                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_link: String(v) })}
-                        placeholder="https://detail.1688.com/..."
-                      />
-                    </div>
-                    {selectedProduct.supplier_link && (
-                      <a
-                        href={selectedProduct.supplier_link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-500 hover:bg-blue-600"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    )}
-                  </div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Subcategory</label>
+                  <EditableField
+                    value={selectedProduct.subcategory || ''}
+                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { subcategory: String(v) })}
+                    placeholder="e.g., Home Decor"
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Link</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <EditableField
-                        value={selectedProduct.product_link || ''}
-                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { product_link: String(v) })}
-                        placeholder="https://www.etsy.com/listing/..."
-                      />
-                    </div>
-                    {selectedProduct.product_link && (
-                      <a
-                        href={selectedProduct.product_link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white"
-                        style={{ backgroundColor: BRAND_ORANGE }}
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    )}
-                  </div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Supplier Name</label>
+                  <EditableField
+                    value={selectedProduct.supplier_name || ''}
+                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_name: String(v) })}
+                    placeholder="Enter supplier"
+                  />
                 </div>
               </div>
 
-              {/* Status + Pricing */}
-              <div className="grid grid-cols-5 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                  <select
-                    value={selectedProduct.product_status || 'active'}
-                    onChange={(e) => handleUpdateProduct(selectedProduct.id, { product_status: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
-                  >
-                    {PRODUCT_STATUSES.map(s => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
-                    ))}
-                  </select>
-                </div>
+              {/* Pricing */}
+              <div className="grid grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Price</label>
-                  <EditableField
-                    type="number"
-                    value={selectedProduct.etsy_full_price || ''}
-                    onChange={(v) => handleUpdateProduct(selectedProduct.id, { etsy_full_price: Number(v) || 0 })}
-                    placeholder="0.00"
-                  />
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-500 font-medium">$</span>
+                    <EditableField
+                      type="number"
+                      value={selectedProduct.etsy_full_price || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { etsy_full_price: Number(v) || 0 })}
+                      placeholder="0.00"
+                      className="pl-7"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Sale %</label>
@@ -1440,6 +1421,55 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
+              {/* 1688 Link */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">1688 Link</label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <EditableField
+                      value={selectedProduct.supplier_link || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_link: String(v) })}
+                      placeholder="https://detail.1688.com/..."
+                    />
+                  </div>
+                  {selectedProduct.supplier_link && (
+                    <a
+                      href={selectedProduct.supplier_link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-blue-500 hover:bg-blue-600"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Etsy Link */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Etsy Link</label>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <EditableField
+                      value={selectedProduct.product_link || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { product_link: String(v) })}
+                      placeholder="https://www.etsy.com/listing/..."
+                    />
+                  </div>
+                  {selectedProduct.product_link && (
+                    <a
+                      href={selectedProduct.product_link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white"
+                      style={{ backgroundColor: BRAND_ORANGE }}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                </div>
+              </div>
+
               {/* Description */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
@@ -1460,35 +1490,35 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     const pricing = selectedProduct.pricing?.find((p) => p.country === country);
                     return (
                       <div key={country} className="flex items-center gap-3 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
-                        <div className="w-14 text-sm font-medium text-gray-900">{country}</div>
+                        <div className="w-36 text-sm font-medium text-gray-900">{COUNTRY_LABELS[country] || country}</div>
                         <div className="flex items-center gap-1">
                           <DollarSign className="w-4 h-4 text-gray-400" />
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={pricing?.price || ''}
-                            onChange={(e) =>
-                              handleUpdatePricing(selectedProduct.id, country, {
-                                price: parseFloat(e.target.value) || 0,
-                              })
-                            }
-                            placeholder="Price"
-                            className="w-24 px-2 py-1.5 border border-gray-200 rounded text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
-                          />
+                          <div className="w-24">
+                            <EditableField
+                              type="number"
+                              value={pricing?.price || ''}
+                              onChange={(v) =>
+                                handleUpdatePricing(selectedProduct.id, country, {
+                                  price: parseFloat(String(v)) || 0,
+                                })
+                              }
+                              placeholder="Price"
+                            />
+                          </div>
                         </div>
                         <div className="flex items-center gap-1">
                           <Clock className="w-4 h-4 text-gray-400" />
-                          <input
-                            type="text"
-                            value={pricing?.shipping_time || ''}
-                            onChange={(e) =>
-                              handleUpdatePricing(selectedProduct.id, country, {
-                                shipping_time: e.target.value,
-                              })
-                            }
-                            placeholder="6-12days"
-                            className="w-28 px-2 py-1.5 border border-gray-200 rounded text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36]"
-                          />
+                          <div className="w-28">
+                            <EditableField
+                              value={pricing?.shipping_time || ''}
+                              onChange={(v) =>
+                                handleUpdatePricing(selectedProduct.id, country, {
+                                  shipping_time: String(v),
+                                })
+                              }
+                              placeholder="6-12days"
+                            />
+                          </div>
                         </div>
                       </div>
                     );
@@ -1671,7 +1701,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       <select value={pricing.country} onChange={(e) => {
                         const updated = [...newPricing]; updated[index].country = e.target.value; setNewPricing(updated);
                       }} className="w-24 px-2 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500">
-                        {COUNTRIES.map((c) => (<option key={c} value={c}>{c}</option>))}
+                        {COUNTRIES.map((c) => (<option key={c} value={c}>{COUNTRY_LABELS[c] || c}</option>))}
                       </select>
                       <div className="flex-1 flex items-center gap-1">
                         <span className="text-gray-500">$</span>
@@ -1763,6 +1793,26 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Image Lightbox */}
+      {enlargedImage && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 cursor-pointer"
+          onClick={() => setEnlargedImage(null)}
+        >
+          <img
+            src={enlargedImage}
+            alt=""
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setEnlargedImage(null)}
+            className="absolute top-4 right-4 p-2 text-white/80 hover:text-white bg-black/50 hover:bg-black/70 rounded-full transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
         </div>
       )}
     </div>

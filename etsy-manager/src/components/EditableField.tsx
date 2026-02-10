@@ -13,6 +13,24 @@ interface EditableFieldProps {
   disabled?: boolean;
 }
 
+// Format date from YYYY-MM-DD to dd/mm/yyyy
+const formatDateDisplay = (date: string): string => {
+  if (!date) return '';
+  const parts = date.split('-');
+  if (parts.length !== 3) return date;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+};
+
+// Parse date from dd/mm/yyyy to YYYY-MM-DD
+const parseDateInput = (display: string): string => {
+  const parts = display.replace(/[^0-9/]/g, '').split('/');
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return display;
+  const dd = parts[0].padStart(2, '0');
+  const mm = parts[1].padStart(2, '0');
+  const yyyy = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 /**
  * EditableField component that uses local state to prevent
  * text deletion during typing. Only syncs to parent on blur.
@@ -31,6 +49,7 @@ export default function EditableField({
   const [localValue, setLocalValue] = useState<string>(value?.toString() || '');
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Update local value when prop changes (but not while focused)
   useEffect(() => {
@@ -81,6 +100,50 @@ export default function EditableField({
         disabled={disabled}
         className={`${baseClass} resize-y min-h-[80px] ${className}`}
       />
+    );
+  }
+
+  // Date type: show dd/mm/yyyy text with hidden native date picker
+  if (type === 'date') {
+    return (
+      <div className="relative">
+        <input
+          ref={inputRef as React.RefObject<HTMLInputElement>}
+          type="text"
+          value={isFocused ? localValue : formatDateDisplay(localValue)}
+          onChange={(e) => {
+            setLocalValue(e.target.value);
+          }}
+          onBlur={() => {
+            setIsFocused(false);
+            // Try to parse dd/mm/yyyy input
+            const parsed = parseDateInput(localValue);
+            if (parsed !== value) {
+              onChange(parsed);
+            }
+          }}
+          onFocus={() => {
+            setIsFocused(true);
+            setLocalValue(value?.toString() || '');
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder || 'dd/mm/yyyy'}
+          disabled={disabled}
+          className={`${baseClass} pr-8 ${className}`}
+        />
+        <input
+          ref={dateInputRef}
+          type="date"
+          value={localValue}
+          onChange={(e) => {
+            const v = e.target.value;
+            setLocalValue(v);
+            onChange(v);
+          }}
+          className="absolute inset-0 opacity-0 cursor-pointer"
+          tabIndex={-1}
+        />
+      </div>
     );
   }
 

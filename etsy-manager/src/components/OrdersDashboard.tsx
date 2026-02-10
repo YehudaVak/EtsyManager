@@ -17,6 +17,14 @@ interface OrdersDashboardProps {
 // Custom orange color
 const BRAND_ORANGE = '#d96f36';
 
+// Format date from YYYY-MM-DD to dd/mm/yyyy
+const formatDate = (date: string | undefined | null): string => {
+  if (!date) return '-';
+  const parts = date.split('-');
+  if (parts.length !== 3) return date;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+};
+
 export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -550,11 +558,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
       case 'date':
         return (
-          <input
+          <EditableField
             type="date"
             value={value || ''}
-            onChange={(e) => handleFieldUpdate(order.id, col.key as keyof Order, e.target.value)}
-            className={inputBaseStyle}
+            onChange={(v) => handleFieldUpdate(order.id, col.key as keyof Order, v)}
           />
         );
 
@@ -1161,7 +1168,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       </td>
                       {/* Date */}
                       <td className="px-3 py-3 text-center text-sm text-gray-900 border-r border-gray-100">
-                        {order.ordered_date || '-'}
+                        {formatDate(order.ordered_date)}
                       </td>
                       {/* Product Name */}
                       <td className="px-3 py-3 text-center text-sm text-gray-900 border-r border-gray-100">
@@ -1298,33 +1305,35 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             <div key={order.id} className={`bg-white rounded-xl shadow-sm overflow-hidden ${isNewOrder(order) ? 'ring-2 ring-orange-300' : ''}`}>
               {/* Order Header - Always Visible */}
               <div
-                className="p-4 cursor-pointer hover:bg-gray-50"
+                className="p-3 cursor-pointer hover:bg-gray-50 space-y-2"
                 onClick={() => {
                   setExpandedOrder(expandedOrder === order.id ? null : order.id);
                   acknowledgeOrder(order);
                 }}
               >
-                <div className="flex items-center gap-4">
+                {/* Top row: Checkbox + Image + Color/Size/Material + Actions */}
+                <div className="flex items-center gap-3">
+                  {/* Checkbox */}
+                  {isAdmin && (
+                    <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedOrders.has(order.id)}
+                        onChange={() => toggleSelectOrder(order.id)}
+                        className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer"
+                      />
+                    </div>
+                  )}
+
                   {/* Image */}
                   <div className="relative flex-shrink-0">
                     {order.image_url ? (
-                      <img src={order.image_url} alt="" className="w-16 h-16 object-cover rounded-lg" />
+                      <img src={order.image_url} alt="" className="w-14 h-14 object-cover rounded-lg" />
                     ) : (
-                      <div className="w-16 h-16 bg-gray-100 rounded-lg flex items-center justify-center">
-                        <Camera className="w-6 h-6 text-gray-400" />
+                      <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center">
+                        <Camera className="w-5 h-5 text-gray-300" />
                       </div>
                     )}
-                    <label className="absolute inset-0 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleImageUpload(order.id, file, order.image_url);
-                        }}
-                      />
-                    </label>
                     {uploadingImage === order.id && (
                       <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
                         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
@@ -1332,82 +1341,86 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     )}
                   </div>
 
-                  {/* Order Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-gray-900 truncate">
-                        {order.product_name || 'New Order'}
-                      </span>
-                      {order.etsy_order_no && (
-                        <span className="text-xs text-gray-700">#{order.etsy_order_no}</span>
-                      )}
+                  {/* Color, Size, Material */}
+                  <div className="flex-1 min-w-0 grid grid-cols-3 gap-2">
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Color</span>
+                      <span className="block text-sm text-gray-900 truncate">{order.color || '-'}</span>
                     </div>
-                    {order.customer_name && (
-                      <p className="text-sm text-gray-700 truncate">{order.customer_name}</p>
-                    )}
-                    <p className="text-sm text-gray-700 truncate">
-                      {order.ordered_date || 'No date'} • {order.order_from || 'No supplier'}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1 text-xs">
-                      {order.size && <span className="bg-blue-100 text-gray-900 px-2 py-0.5 rounded">{order.size}</span>}
-                      {order.color && <span className="bg-gray-200 text-gray-900 px-2 py-0.5 rounded">{order.color}</span>}
-                      {order.material && <span className="bg-green-100 text-gray-900 px-2 py-0.5 rounded">{order.material}</span>}
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Size</span>
+                      <span className="block text-sm text-gray-900 truncate">{order.size || '-'}</span>
                     </div>
-                    {isAdmin && (
-                      <div className="flex items-center gap-3 mt-1">
-                        {order.sold_for && (
-                          <span className="text-sm font-medium text-green-600">
-                            {formatCurrency(order.sold_for)}
-                          </span>
-                        )}
-                        {order.profit !== undefined && order.profit !== null && (
-                          <span className={`text-sm font-medium ${order.profit >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                            Profit: {formatCurrency(order.profit)}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    <div>
+                      <span className="block text-[10px] text-gray-400 uppercase">Material</span>
+                      <span className="block text-sm text-gray-900 truncate">{order.material || '-'}</span>
+                    </div>
                   </div>
 
-                  {/* Status Indicators */}
-                  <div className="flex flex-col items-end gap-1">
-                    <div className="flex flex-wrap gap-1 justify-end">
-                      {isNewOrder(order) && (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>
-                      )}
-                      {isOutOfStock(order) && (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>
-                      )}
-                      {needsTracking(order) && (
-                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">TRACK</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {order.is_paid && <span className="w-2 h-2 bg-green-500 rounded-full" title="Paid"></span>}
-                      {order.is_shipped && <span className="w-2 h-2 bg-blue-500 rounded-full" title="Shipped"></span>}
-                      {order.is_delivered && <span className="w-2 h-2 bg-purple-500 rounded-full" title="Delivered"></span>}
-                    </div>
-                    <div className="flex items-center">
-                      {isAdmin && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openDeleteConfirm(order);
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded ml-1"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                      {expandedOrder === order.id ? (
-                        <ChevronUp className="w-5 h-5 text-gray-400" />
-                      ) : (
-                        <ChevronDown className="w-5 h-5 text-gray-400" />
-                      )}
-                    </div>
+                  {/* Actions */}
+                  <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(order)}
+                      className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => openDeleteConfirm(order)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                    {expandedOrder === order.id ? (
+                      <ChevronUp className="w-4 h-4 text-gray-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    )}
                   </div>
                 </div>
+
+                {/* Product Name + Status badges */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-semibold text-gray-900 text-sm truncate">{order.product_name || 'New Order'}</h3>
+                  {order.etsy_order_no && (
+                    <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>
+                  )}
+                  {isNewOrder(order) && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>
+                  )}
+                  {isOutOfStock(order) && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>
+                  )}
+                  {needsTracking(order) && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>
+                  )}
+                  {order.is_paid && <span className="w-2 h-2 bg-green-500 rounded-full" title="Paid"></span>}
+                  {order.is_shipped && <span className="w-2 h-2 bg-blue-500 rounded-full" title="Shipped"></span>}
+                  {order.is_delivered && <span className="w-2 h-2 bg-purple-500 rounded-full" title="Delivered"></span>}
+                </div>
+
+                {/* Date + Customer + Supplier */}
+                <div className="flex items-center gap-3 text-xs text-gray-500">
+                  <span>{formatDate(order.ordered_date) !== '-' ? formatDate(order.ordered_date) : 'No date'}</span>
+                  {order.customer_name && <span>• {order.customer_name}</span>}
+                  {order.order_from && <span>• {order.order_from}</span>}
+                </div>
+
+                {/* Prices */}
+                {isAdmin && (order.sold_for || (order.profit !== undefined && order.profit !== null)) && (
+                  <div className="flex items-center gap-3">
+                    {order.sold_for && (
+                      <span className="text-xs text-gray-500">Sold: <span className="font-semibold text-gray-900">{formatCurrency(order.sold_for)}</span></span>
+                    )}
+                    {order.profit !== undefined && order.profit !== null && (
+                      <span className="text-xs text-gray-500">Profit: <span className={`font-semibold ${order.profit >= 0 ? 'text-green-700' : 'text-red-500'}`}>{formatCurrency(order.profit)}</span></span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Expanded Content - Mobile */}
@@ -1439,11 +1452,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-gray-900 mb-1">Order Date</label>
-                      <input
+                      <EditableField
                         type="date"
                         value={order.ordered_date || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'ordered_date', e.target.value)}
-                        className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
+                        onChange={(v) => handleFieldUpdate(order.id, 'ordered_date', v)}
                       />
                     </div>
                     <div>
@@ -1855,31 +1867,42 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     placeholder="Enter order number"
                   />
                 </div>
-                {/* Product Catalog Selector - compact */}
-                {products.length > 0 && (
-                  <div className="flex-1">
-                    <label className="block text-xs font-medium text-blue-600 mb-1">
-                      <ShoppingBag className="w-3 h-3 inline mr-1" />
-                      From Catalog
-                    </label>
-                    <select
-                      value={selectedOrder.product_id || ''}
-                      onChange={(e) => handleSelectProduct(selectedOrder.id, e.target.value)}
-                      className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">Select product...</option>
-                      {products.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                          {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
               </div>
 
-              {/* Image + Product Name + Customer + Supplier */}
+              {/* From Catalog (full row) */}
+              {products.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-blue-600 mb-1">
+                    <ShoppingBag className="w-3 h-3 inline mr-1" />
+                    From Catalog
+                  </label>
+                  <select
+                    value={selectedOrder.product_id || ''}
+                    onChange={(e) => handleSelectProduct(selectedOrder.id, e.target.value)}
+                    className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select product...</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name}
+                        {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Product Name (full row) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
+                <EditableField
+                  value={selectedOrder.product_name || ''}
+                  onChange={(v) => handleFieldUpdate(selectedOrder.id, 'product_name', v)}
+                  placeholder="Enter product name"
+                />
+              </div>
+
+              {/* Image + Customer + Supplier */}
               <div className="flex gap-5">
                 {/* Image Upload */}
                 <div className="flex-shrink-0">
@@ -1924,16 +1947,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </div>
                 </div>
 
-                {/* Main Fields: Product Name, Customer, Supplier */}
+                {/* Customer + Supplier */}
                 <div className="flex-1 space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
-                    <EditableField
-                      value={selectedOrder.product_name || ''}
-                      onChange={(v) => handleFieldUpdate(selectedOrder.id, 'product_name', v)}
-                      placeholder="Enter product name"
-                    />
-                  </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label>
                     <EditableField
