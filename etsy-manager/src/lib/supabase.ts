@@ -109,6 +109,7 @@ export interface Order {
 
   // Product Link
   product_id?: string;
+  variation_id?: string;
 
   // Multi-tenant
   store_id?: string;
@@ -215,12 +216,26 @@ export interface ProductVariation {
   material?: string;
   price?: number;
   shipping_time?: string;
+  sort_order?: number;
   created_at?: string;
   updated_at?: string;
 }
 
-// Product with pricing and variations
+// Product supplier (multiple suppliers per product, one selected)
+export interface ProductSupplier {
+  id: string;
+  product_id: string;
+  name: string;
+  price: number;
+  is_selected: boolean;
+  sort_order?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Product with pricing, variations, and suppliers
 export interface ProductWithPricing extends Product {
   pricing?: ProductPricing[];
   variations?: ProductVariation[];
+  suppliers?: ProductSupplier[];
 }

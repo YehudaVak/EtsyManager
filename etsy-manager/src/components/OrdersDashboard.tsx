@@ -37,6 +37,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     orderName: ''
   });
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: keyof Order | null; direction: 'asc' | 'desc' }>({
     key: 'ordered_date',
     direction: 'desc'
@@ -47,19 +48,21 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
   // Filter state for supplier status tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'out_of_stock'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock'>('all');
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
+  const [productSearch, setProductSearch] = useState('');
+  const [productDropdownOpen, setProductDropdownOpen] = useState<string | null>(null);
 
   // Column widths state for resizable columns
   const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
     rowNum: 50,
-    image: 80,
+    image: 110,
     date: 110,
-    productName: 150,
-    orderNo: 120,
-    customer: 150,
+    productName: 200,
+    orderNo: 180,
+    customer: 170,
     address: 280,
     size: 90,
     color: 90,
@@ -73,7 +76,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
   // Row heights state for resizable rows
   const [rowHeights, setRowHeights] = useState<{ [key: string]: number }>({});
-  const defaultRowHeight = 60;
+  const defaultRowHeight = 115;
 
   // Refs for column resizing
   const resizingColumn = useRef<string | null>(null);
@@ -105,6 +108,20 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       fetchProducts();
     }
   }, [selectedStore]);
+
+  // Close product search dropdown on outside click
+  useEffect(() => {
+    if (!productDropdownOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-product-search]')) {
+        setProductDropdownOpen(null);
+        setProductSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [productDropdownOpen]);
 
   const fetchOrders = async () => {
     if (!selectedStore) return;
@@ -147,10 +164,23 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
       if (pricingError) throw pricingError;
 
-      // Combine products with their pricing
+      // Fetch all variations
+      let variationsData: any[] = [];
+      try {
+        const { data, error: variationsError } = await supabase
+          .from('product_variations')
+          .select('*')
+          .order('sort_order', { ascending: true });
+        if (!variationsError) variationsData = data || [];
+      } catch {
+        // product_variations table may not exist yet
+      }
+
+      // Combine products with their pricing and variations
       const productsWithPricing: ProductWithPricing[] = (productsData || []).map((product) => ({
         ...product,
         pricing: (pricingData || []).filter((p) => p.product_id === product.id),
+        variations: variationsData.filter((v) => v.product_id === product.id),
       }));
 
       setProducts(productsWithPricing);
@@ -269,9 +299,11 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
     const updates: Partial<Order> = {
       product_id: productId,
+      variation_id: undefined,
       product_name: product.name,
       product_link: product.product_link || undefined,
       order_from: product.supplier_name || undefined,
+      image_url: product.image_url || undefined,
     };
 
     // Set supplier price if available
@@ -296,6 +328,49 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       }
     } catch (error) {
       console.error('Error selecting product:', error);
+    }
+  };
+
+  // Handle selecting a variation for an order
+  const handleSelectVariation = async (orderId: string, variationId: string) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order?.product_id) return;
+
+    const product = products.find(p => p.id === order.product_id);
+    const variation = product?.variations?.find(v => v.id === variationId);
+
+    const updates: Partial<Order> = {
+      variation_id: variationId || undefined,
+    };
+
+    // Override image and product_name with variation data
+    if (variation) {
+      if (variation.image_url) {
+        updates.image_url = variation.image_url;
+      }
+      updates.product_name = `${product?.name} – ${variation.name}`;
+    } else {
+      // "None" selected — revert to base product
+      updates.image_url = product?.image_url || undefined;
+      updates.product_name = product?.name;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update(updates)
+        .eq('id', orderId);
+
+      if (error) throw error;
+
+      setOrders(prev => prev.map(o =>
+        o.id === orderId ? { ...o, ...updates } : o
+      ));
+      if (selectedOrder && selectedOrder.id === orderId) {
+        setSelectedOrder({ ...selectedOrder, ...updates });
+      }
+    } catch (error) {
+      console.error('Error selecting variation:', error);
     }
   };
 
@@ -333,11 +408,53 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     }
   };
 
+  // Debounced field update for text inputs - updates local state immediately, DB after 500ms
+  const pendingUpdates = useRef<{ [key: string]: ReturnType<typeof setTimeout> }>({});
+
+  const handleDebouncedFieldUpdate = useCallback((orderId: string, field: keyof Order, value: any) => {
+    // Update local state immediately (no lag)
+    setOrders(prev => prev.map(order =>
+      order.id === orderId ? { ...order, [field]: value } : order
+    ));
+    if (selectedOrder && selectedOrder.id === orderId) {
+      setSelectedOrder(prev => prev ? { ...prev, [field]: value } : prev);
+    }
+
+    // Debounce the DB call
+    const key = `${orderId}-${String(field)}`;
+    if (pendingUpdates.current[key]) {
+      clearTimeout(pendingUpdates.current[key]);
+    }
+    pendingUpdates.current[key] = setTimeout(async () => {
+      try {
+        let updates: Partial<Order> = { [field]: value };
+
+        if (field === 'sold_for' || field === 'fees_percent' || field === 'product_cost') {
+          const order = orders.find(o => o.id === orderId);
+          if (order) {
+            const soldFor = field === 'sold_for' ? value : order.sold_for || 0;
+            const fees = field === 'fees_percent' ? value : order.fees_percent || 12.5;
+            const cost = field === 'product_cost' ? value : order.product_cost || 0;
+            const profit = soldFor - (soldFor * fees / 100) - cost;
+            updates.profit = Math.round(profit * 100) / 100;
+          }
+        }
+
+        await supabase.from('orders').update(updates).eq('id', orderId);
+      } catch (error) {
+        console.error('Error updating field:', error);
+      }
+      delete pendingUpdates.current[key];
+    }, 500);
+  }, [orders, selectedOrder]);
+
   const handleAddOrder = async () => {
+    if (!selectedStore) return;
     try {
       const { data, error } = await supabase
         .from('orders')
         .insert({
+          store_id: selectedStore.id,
           ordered_date: new Date().toISOString().split('T')[0],
           fees_percent: 12.5
         })
@@ -456,6 +573,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     new: orders.filter(isNewOrder).length,
     paid: orders.filter(order => order.is_paid).length,
     needs_tracking: orders.filter(needsTracking).length,
+    shipped: orders.filter(order => order.is_shipped).length,
+    delivered: orders.filter(order => order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
   };
 
@@ -465,6 +584,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'new' && !isNewOrder(order)) return false;
       if (statusFilter === 'paid' && !order.is_paid) return false;
       if (statusFilter === 'needs_tracking' && !needsTracking(order)) return false;
+      if (statusFilter === 'shipped' && !order.is_shipped) return false;
+      if (statusFilter === 'delivered' && !order.is_delivered) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
 
       // Then apply search filter
@@ -536,7 +657,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const headerText = isAdmin ? 'text-gray-900' : 'text-white';
 
   // Common input styles for better editing experience
-  const inputBaseStyle = "w-full px-2 py-1.5 text-sm text-gray-900 bg-white border border-gray-200 rounded focus:border-[#d96f36] focus:ring-1 focus:ring-[#d96f36] focus:outline-none transition-colors";
+  const inputBaseStyle = "w-full px-2 py-1.5 text-base text-gray-900 bg-white border border-gray-200 rounded focus:border-[#d96f36] focus:ring-1 focus:ring-[#d96f36] focus:outline-none transition-colors";
   const checkboxStyle = "w-5 h-5 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer";
 
   // Render table cell based on type
@@ -608,7 +729,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
       case 'readonly':
         return (
-          <span className={`text-sm font-semibold px-2 py-1.5 block ${col.key === 'profit' && value >= 0 ? 'text-green-600' : col.key === 'profit' ? 'text-red-600' : 'text-gray-900'}`}>
+          <span className={`text-base font-semibold px-2 py-1.5 block ${col.key === 'profit' && value >= 0 ? 'text-green-600' : col.key === 'profit' ? 'text-red-600' : 'text-gray-900'}`}>
             {col.key === 'profit' ? formatCurrency(value) : value}
           </span>
         );
@@ -628,11 +749,11 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
   // Render image cell (separate for frozen column)
   const renderImageCell = (order: Order) => (
-    <div className="relative w-14 h-14 mx-auto">
+    <div className="relative w-24 h-24 mx-auto">
       {order.image_url ? (
-        <img src={order.image_url} alt="" className="w-14 h-14 object-cover rounded" />
+        <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded" />
       ) : (
-        <div className="w-14 h-14 bg-gray-100 rounded flex items-center justify-center border-2 border-dashed border-gray-300">
+        <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center border-2 border-dashed border-gray-300">
           <Camera className="w-5 h-5 text-gray-400" />
         </div>
       )}
@@ -791,6 +912,36 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             )}
           </button>
           <button
+            onClick={() => setStatusFilter('shipped')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'shipped'
+                ? 'bg-purple-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-purple-50 border border-gray-200'
+            }`}
+          >
+            Shipped
+            {statusCounts.shipped > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'shipped' ? 'bg-purple-600' : 'bg-purple-100 text-purple-700'}`}>
+                {statusCounts.shipped}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('delivered')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'delivered'
+                ? 'bg-teal-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-teal-50 border border-gray-200'
+            }`}
+          >
+            Delivered
+            {statusCounts.delivered > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'delivered' ? 'bg-teal-600' : 'bg-teal-100 text-teal-700'}`}>
+                {statusCounts.delivered}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setStatusFilter('out_of_stock')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
               statusFilter === 'out_of_stock'
@@ -839,7 +990,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       <div className="hidden lg:block p-4">
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
           <div className="overflow-x-auto">
-            <table className="w-full" style={{ tableLayout: 'fixed' }}>
+            <table style={{ tableLayout: 'fixed', width: Math.max(Object.values(columnWidths).reduce((a, b) => a + b, 0) + 40, 0) }}>
               {/* Table Header */}
               <thead>
                 <tr style={{ backgroundColor: BRAND_ORANGE }}>
@@ -1102,7 +1253,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         </td>
                       )}
                       {/* Row number */}
-                      <td className="px-3 py-3 text-center text-sm font-medium text-gray-600 border-r border-gray-100 relative">
+                      <td className="px-3 py-3 text-center text-base font-medium text-gray-600 border-r border-gray-100 relative">
                         {index + 1}
                         {/* Row resize handle */}
                         <div
@@ -1133,15 +1284,25 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               PAID
                             </span>
                           )}
+                          {order.is_shipped && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                              SHIPPED
+                            </span>
+                          )}
+                          {order.is_delivered && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
+                              DELIVERED
+                            </span>
+                          )}
                         </div>
                       </td>
                       {/* Image */}
                       <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative w-12 h-12 mx-auto group/img">
+                        <div className="relative w-24 h-24 mx-auto group/img">
                           {order.image_url ? (
-                            <img src={order.image_url} alt="" className="w-12 h-12 object-cover rounded" />
+                            <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded" />
                           ) : (
-                            <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300">
+                            <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300">
                               <Camera className="w-4 h-4 text-gray-400" />
                             </div>
                           )}
@@ -1167,33 +1328,37 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         </div>
                       </td>
                       {/* Date */}
-                      <td className="px-3 py-3 text-center text-sm text-gray-900 border-r border-gray-100">
+                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
                         {formatDate(order.ordered_date)}
                       </td>
                       {/* Product Name */}
-                      <td className="px-3 py-3 text-center text-sm text-gray-900 border-r border-gray-100">
-                        <div className="truncate" title={order.product_name || ''}>
+                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                        <div className="line-clamp-2" title={order.product_name || ''}>
                           {order.product_name || '-'}
                         </div>
                       </td>
                       {/* Tracking Number */}
-                      <td className="px-3 py-3 text-center text-sm text-gray-900 font-medium border-r border-gray-100">
-                        {order.tracking_number || '-'}
+                      <td className="px-3 py-3 text-center text-base text-gray-900 font-medium border-r border-gray-100">
+                        <div className="line-clamp-2" title={order.tracking_number || ''}>
+                          {order.tracking_number || '-'}
+                        </div>
                       </td>
                       {/* Customer */}
-                      <td className="px-3 py-3 text-center text-sm text-gray-900 border-r border-gray-100">
-                        {order.customer_name || '-'}
+                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                        <div className="line-clamp-2" title={order.customer_name || ''}>
+                          {order.customer_name || '-'}
+                        </div>
                       </td>
                       {/* Address */}
-                      <td className="px-3 py-3 text-center text-sm text-gray-700 border-r border-gray-100">
-                        <div className="truncate" title={order.address || ''}>
+                      <td className="px-3 py-3 text-center text-base text-gray-700 border-r border-gray-100">
+                        <div className="line-clamp-2" title={order.address || ''}>
                           {order.address || '-'}
                         </div>
                       </td>
                       {/* Size */}
                       <td className="px-3 py-3 text-center border-r border-gray-100">
                         {order.size ? (
-                          <span className="inline-block bg-blue-100 text-gray-900 px-2 py-1 rounded text-xs font-medium">
+                          <span className="inline-block bg-blue-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">
                             {order.size}
                           </span>
                         ) : '-'}
@@ -1201,7 +1366,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       {/* Color */}
                       <td className="px-3 py-3 text-center border-r border-gray-100">
                         {order.color ? (
-                          <span className="inline-block bg-gray-200 text-gray-900 px-2 py-1 rounded text-xs font-medium">
+                          <span className="inline-block bg-gray-200 text-gray-900 px-2 py-1 rounded text-sm font-medium">
                             {order.color}
                           </span>
                         ) : '-'}
@@ -1209,7 +1374,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       {/* Material */}
                       <td className="px-3 py-3 text-center border-r border-gray-100">
                         {order.material ? (
-                          <span className="inline-block bg-green-100 text-gray-900 px-2 py-1 rounded text-xs font-medium">
+                          <span className="inline-block bg-green-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">
                             {order.material}
                           </span>
                         ) : '-'}
@@ -1328,9 +1493,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   {/* Image */}
                   <div className="relative flex-shrink-0">
                     {order.image_url ? (
-                      <img src={order.image_url} alt="" className="w-14 h-14 object-cover rounded-lg" />
+                      <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded-lg" />
                     ) : (
-                      <div className="w-14 h-14 bg-gray-100 rounded-lg flex items-center justify-center">
+                      <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center">
                         <Camera className="w-5 h-5 text-gray-300" />
                       </div>
                     )}
@@ -1398,9 +1563,15 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   {needsTracking(order) && (
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>
                   )}
-                  {order.is_paid && <span className="w-2 h-2 bg-green-500 rounded-full" title="Paid"></span>}
-                  {order.is_shipped && <span className="w-2 h-2 bg-blue-500 rounded-full" title="Shipped"></span>}
-                  {order.is_delivered && <span className="w-2 h-2 bg-purple-500 rounded-full" title="Delivered"></span>}
+                  {order.is_paid && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>
+                  )}
+                  {order.is_shipped && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-700">SHIPPED</span>
+                  )}
+                  {order.is_delivered && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-100 text-teal-700">DELIVERED</span>
+                  )}
                 </div>
 
                 {/* Date + Customer + Supplier */}
@@ -1428,24 +1599,76 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 <div className="border-t bg-gray-50 p-4 space-y-4">
                   {/* Product Selector */}
                   {products.length > 0 && (
-                    <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                    <div className="bg-blue-50 rounded-lg p-3 border border-blue-200 relative" data-product-search>
                       <label className="block text-xs font-medium text-blue-800 mb-1">
                         <ShoppingBag className="w-3 h-3 inline mr-1" />
                         Select from Products Catalog
                       </label>
-                      <select
-                        value={order.product_id || ''}
-                        onChange={(e) => handleSelectProduct(order.id, e.target.value)}
-                        className="w-full px-3 py-2 border border-blue-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">-- Select a product --</option>
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name} {product.variants ? `(${product.variants})` : ''}
-                            {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={productDropdownOpen === order.id ? productSearch : (products.find(p => p.id === order.product_id)?.name || '')}
+                          onChange={(e) => {
+                            setProductSearch(e.target.value);
+                            if (!productDropdownOpen) setProductDropdownOpen(order.id);
+                          }}
+                          onFocus={() => {
+                            setProductDropdownOpen(order.id);
+                            setProductSearch('');
+                          }}
+                          placeholder="Search products..."
+                          className="w-full pl-9 pr-3 py-2 border border-blue-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      {productDropdownOpen === order.id && (
+                        <div className="absolute z-50 left-3 right-3 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                          {products
+                            .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
+                            .map((product) => (
+                              <button
+                                key={product.id}
+                                onClick={() => {
+                                  handleSelectProduct(order.id, product.id);
+                                  setProductDropdownOpen(null);
+                                  setProductSearch('');
+                                }}
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-2 ${
+                                  order.product_id === product.id ? 'bg-blue-50 font-medium' : ''
+                                }`}
+                              >
+                                {product.image_url && (
+                                  <img src={product.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
+                                )}
+                                <span className="truncate">{product.name}</span>
+                              </button>
+                            ))}
+                          {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
+                            <div className="px-3 py-2 text-sm text-gray-400">No products found</div>
+                          )}
+                        </div>
+                      )}
+                      {/* Variation picker */}
+                      {(() => {
+                        const selectedProd = products.find(p => p.id === order.product_id);
+                        if (selectedProd?.variations && selectedProd.variations.length > 0) {
+                          return (
+                            <select
+                              value={order.variation_id || ''}
+                              onChange={(e) => handleSelectVariation(order.id, e.target.value)}
+                              className="w-full mt-2 px-3 py-2 border border-blue-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">-- Select variation --</option>
+                              {selectedProd.variations.map((v) => (
+                                <option key={v.id} value={v.id}>
+                                  {v.name} {v.price ? `- $${v.price}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   )}
 
@@ -1463,7 +1686,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.product_name || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'product_name', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'product_name', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1475,7 +1698,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.etsy_order_no || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'etsy_order_no', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'etsy_order_no', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1484,7 +1707,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.customer_name || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'customer_name', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'customer_name', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1495,7 +1718,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     <input
                       type="text"
                       value={order.order_from || ''}
-                      onChange={(e) => handleFieldUpdate(order.id, 'order_from', e.target.value)}
+                      onChange={(e) => handleDebouncedFieldUpdate(order.id, 'order_from', e.target.value)}
                       className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
@@ -1504,7 +1727,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     <label className="block text-xs font-medium text-gray-900 mb-1">Address</label>
                     <textarea
                       value={order.address || ''}
-                      onChange={(e) => handleFieldUpdate(order.id, 'address', e.target.value)}
+                      onChange={(e) => handleDebouncedFieldUpdate(order.id, 'address', e.target.value)}
                       rows={2}
                       className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                     />
@@ -1516,7 +1739,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.product_link || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'product_link', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'product_link', e.target.value)}
                         className="flex-1 px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                       {order.product_link && (
@@ -1533,7 +1756,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.size || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'size', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'size', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1542,7 +1765,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.color || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'color', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'color', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1551,7 +1774,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <input
                         type="text"
                         value={order.material || ''}
-                        onChange={(e) => handleFieldUpdate(order.id, 'material', e.target.value)}
+                        onChange={(e) => handleDebouncedFieldUpdate(order.id, 'material', e.target.value)}
                         className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
@@ -1561,64 +1784,94 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     <label className="block text-xs font-medium text-gray-900 mb-1">Notes</label>
                     <textarea
                       value={order.notes || ''}
-                      onChange={(e) => handleFieldUpdate(order.id, 'notes', e.target.value)}
+                      onChange={(e) => handleDebouncedFieldUpdate(order.id, 'notes', e.target.value)}
                       rows={2}
                       className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
 
-                  {isAdmin && (
-                    <div className="bg-green-50 rounded-lg p-4">
-                      <h3 className="font-medium text-green-800 mb-3">Financial</h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                        <div>
-                          <label className="block text-xs font-medium text-gray-900 mb-1">Sold For</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={order.sold_for || ''}
-                            onChange={(e) => handleFieldUpdate(order.id, 'sold_for', parseFloat(e.target.value) || 0)}
-                            className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
-                          />
+                  {isAdmin && (() => {
+                    const linkedProduct = products.find(p => p.id === order.product_id);
+                    const etsyPrice = linkedProduct?.etsy_full_price || null;
+                    const salePercent = linkedProduct?.sale_percent ?? 30;
+                    const supplierPrice = linkedProduct?.supplier_price || null;
+                    const supplierName = linkedProduct?.supplier_name || null;
+                    const afterSale = etsyPrice ? etsyPrice * (1 - salePercent / 100) : null;
+                    const etsyFee = afterSale ? afterSale * 0.12 : null;
+                    const profit = (afterSale !== null && etsyFee !== null && supplierPrice) ? afterSale - etsyFee - supplierPrice : null;
+                    const profitPercent = (profit !== null && afterSale) ? ((profit / afterSale) * 100).toFixed(0) : null;
+
+                    return (
+                      <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+                        <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing</h3>
+
+                        {/* Row 1: Etsy Price, Sale %, After Sale */}
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Price</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                              {etsyPrice ? `$${etsyPrice.toFixed(0)}` : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Sale %</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                              {salePercent}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">After Sale</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                              {afterSale !== null ? `$${afterSale.toFixed(2)}` : '-'}
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-900 mb-1">Fees %</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={order.fees_percent || ''}
-                            onChange={(e) => handleFieldUpdate(order.id, 'fees_percent', parseFloat(e.target.value) || 12.5)}
-                            className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
-                          />
+
+                        {/* Row 2: Etsy Fee, After Fee, Supplier $ */}
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Fee (12%)</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-red-500">
+                              {etsyFee !== null ? `-$${etsyFee.toFixed(2)}` : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">After Fee</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                              {(afterSale !== null && etsyFee !== null) ? `$${(afterSale - etsyFee).toFixed(2)}` : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Supplier $</label>
+                            <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                              {supplierPrice ? `$${supplierPrice.toFixed(2)}` : '-'}
+                              {supplierName && (
+                                <span className="text-xs text-gray-400 ml-1">({supplierName})</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-900 mb-1">Product Cost</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={order.product_cost || ''}
-                            onChange={(e) => handleFieldUpdate(order.id, 'product_cost', parseFloat(e.target.value) || 0)}
-                            className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-900 mb-1">Amount to Pay</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={order.total_amount_to_pay || ''}
-                            onChange={(e) => handleFieldUpdate(order.id, 'total_amount_to_pay', parseFloat(e.target.value) || 0)}
-                            className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
-                          />
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Profit $</label>
+                            <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                              profit === null ? 'text-gray-400' : profit >= 0 ? 'text-green-700' : 'text-red-500'
+                            }`}>
+                              {profit !== null ? `$${profit.toFixed(2)}` : '-'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-600 mb-1">Profit %</label>
+                            <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                              profitPercent === null ? 'text-gray-400' : profit! >= 0 ? 'text-green-700' : 'text-red-500'
+                            }`}>
+                              {profitPercent !== null ? `${profitPercent}%` : '-'}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <div className="mt-3 text-right">
-                        <span className="text-lg font-bold text-green-700">
-                          Profit: {formatCurrency(order.profit)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Amount to Pay - Visible to Supplier */}
                   {!isAdmin && (
@@ -1687,7 +1940,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     <input
                       type="text"
                       value={order.tracking_number || ''}
-                      onChange={(e) => handleFieldUpdate(order.id, 'tracking_number', e.target.value)}
+                      onChange={(e) => handleDebouncedFieldUpdate(order.id, 'tracking_number', e.target.value)}
                       className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                     />
                   </div>
@@ -1701,7 +1954,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <label className="block text-xs font-medium text-gray-900 mb-1">Issue</label>
                             <textarea
                               value={order.issue || ''}
-                              onChange={(e) => handleFieldUpdate(order.id, 'issue', e.target.value)}
+                              onChange={(e) => handleDebouncedFieldUpdate(order.id, 'issue', e.target.value)}
                               rows={2}
                               className="w-full px-3 py-2 border border-red-200 rounded-lg text-gray-900 focus:ring-2 focus:ring-red-500"
                             />
@@ -1710,7 +1963,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <label className="block text-xs font-medium text-gray-900 mb-1">Solution</label>
                             <textarea
                               value={order.the_solution || ''}
-                              onChange={(e) => handleFieldUpdate(order.id, 'the_solution', e.target.value)}
+                              onChange={(e) => handleDebouncedFieldUpdate(order.id, 'the_solution', e.target.value)}
                               rows={2}
                               className="w-full px-3 py-2 border border-green-200 rounded-lg text-gray-900 focus:ring-2 focus:ring-green-500"
                             />
@@ -1722,7 +1975,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         <label className="block text-xs font-medium text-gray-900 mb-1">Internal Notes</label>
                         <textarea
                           value={order.internal_notes || ''}
-                          onChange={(e) => handleFieldUpdate(order.id, 'internal_notes', e.target.value)}
+                          onChange={(e) => handleDebouncedFieldUpdate(order.id, 'internal_notes', e.target.value)}
                           rows={2}
                           className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500"
                         />
@@ -1829,7 +2082,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
       {/* Order Detail Card Modal */}
       {selectedOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedOrder(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); setSelectedOrder(null); } }}>
           <div
             className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
@@ -1840,7 +2093,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 {selectedOrder.customer_name || 'New Order'} {selectedOrder.etsy_order_no && `#${selectedOrder.etsy_order_no}`}
               </h2>
               <button
-                onClick={() => setSelectedOrder(null)}
+                onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
                 className="p-2 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
               >
                 <X className="w-6 h-6" />
@@ -1871,24 +2124,86 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
               {/* From Catalog (full row) */}
               {products.length > 0 && (
-                <div>
+                <div className="relative" data-product-search>
                   <label className="block text-xs font-medium text-blue-600 mb-1">
                     <ShoppingBag className="w-3 h-3 inline mr-1" />
                     From Catalog
                   </label>
-                  <select
-                    value={selectedOrder.product_id || ''}
-                    onChange={(e) => handleSelectProduct(selectedOrder.id, e.target.value)}
-                    className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Select product...</option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
-                        {product.pricing?.[0] ? ` - $${product.pricing[0].price}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={productDropdownOpen === selectedOrder.id ? productSearch : (products.find(p => p.id === selectedOrder.product_id)?.name || '')}
+                      onChange={(e) => {
+                        setProductSearch(e.target.value);
+                        if (!productDropdownOpen) setProductDropdownOpen(selectedOrder.id);
+                      }}
+                      onFocus={() => {
+                        setProductDropdownOpen(selectedOrder.id);
+                        setProductSearch('');
+                      }}
+                      placeholder="Search products..."
+                      className="w-full pl-9 pr-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
+                    />
+                    {selectedOrder.product_id && productDropdownOpen !== selectedOrder.id && (
+                      <button
+                        onClick={() => {
+                          handleSelectProduct(selectedOrder.id, '');
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-red-500"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                  {productDropdownOpen === selectedOrder.id && (
+                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                      {products
+                        .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
+                        .map((product) => (
+                          <button
+                            key={product.id}
+                            onClick={() => {
+                              handleSelectProduct(selectedOrder.id, product.id);
+                              setProductDropdownOpen(null);
+                              setProductSearch('');
+                            }}
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-2 ${
+                              selectedOrder.product_id === product.id ? 'bg-blue-50 font-medium' : ''
+                            }`}
+                          >
+                            {product.image_url && (
+                              <img src={product.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
+                            )}
+                            <span className="truncate">{product.name}</span>
+                          </button>
+                        ))}
+                      {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-sm text-gray-400">No products found</div>
+                      )}
+                    </div>
+                  )}
+                  {/* Variation picker */}
+                  {(() => {
+                    const selectedProd = products.find(p => p.id === selectedOrder.product_id);
+                    if (selectedProd?.variations && selectedProd.variations.length > 0) {
+                      return (
+                        <select
+                          value={selectedOrder.variation_id || ''}
+                          onChange={(e) => handleSelectVariation(selectedOrder.id, e.target.value)}
+                          className="w-full mt-2 px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">-- Select variation --</option>
+                          {selectedProd.variations.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name} {v.price ? `- $${v.price}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               )}
 
@@ -1908,7 +2223,12 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 <div className="flex-shrink-0">
                   <div className="relative w-28 h-28">
                     {selectedOrder.image_url ? (
-                      <img src={selectedOrder.image_url} alt="" className="w-28 h-28 object-cover rounded-xl" />
+                      <img
+                        src={selectedOrder.image_url}
+                        alt=""
+                        className="w-28 h-28 object-cover rounded-xl cursor-pointer hover:opacity-80 transition-opacity"
+                        onClick={() => setEnlargedImage(selectedOrder.image_url!)}
+                      />
                     ) : (
                       <div className="w-28 h-28 bg-gray-50 rounded-xl flex flex-col items-center justify-center border-2 border-dashed border-gray-300">
                         <Camera className="w-7 h-7 text-gray-300" />
@@ -2111,56 +2431,89 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               </div>
 
               {/* Financial Section (Admin Only) */}
-              {isAdmin && (
-                <div className="bg-green-50 rounded-xl p-4">
-                  <h3 className="font-semibold text-green-800 mb-3">Financial Details</h3>
-                  <div className="grid grid-cols-5 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Sold For</label>
-                      <EditableField
-                        type="number"
-                        value={selectedOrder.sold_for || ''}
-                        onChange={(v) => handleFieldUpdate(selectedOrder.id, 'sold_for', v)}
-                        placeholder="0.00"
-                      />
+              {isAdmin && (() => {
+                const linkedProduct = products.find(p => p.id === selectedOrder.product_id);
+                const etsyPrice = linkedProduct?.etsy_full_price || null;
+                const salePercent = linkedProduct?.sale_percent ?? 30;
+                const supplierPrice = linkedProduct?.supplier_price || null;
+                const supplierName = linkedProduct?.supplier_name || null;
+                const afterSale = etsyPrice ? etsyPrice * (1 - salePercent / 100) : null;
+                const etsyFee = afterSale ? afterSale * 0.12 : null;
+                const profit = (afterSale !== null && etsyFee !== null && supplierPrice) ? afterSale - etsyFee - supplierPrice : null;
+                const profitPercent = (profit !== null && afterSale) ? ((profit / afterSale) * 100).toFixed(0) : null;
+
+                return (
+                  <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing</h3>
+
+                    {/* Row 1: Etsy Price, Sale %, After Sale */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Price</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                          {etsyPrice ? `$${etsyPrice.toFixed(0)}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Sale %</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                          {salePercent}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">After Sale</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                          {afterSale !== null ? `$${afterSale.toFixed(2)}` : '-'}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Fees %</label>
-                      <EditableField
-                        type="number"
-                        value={selectedOrder.fees_percent || ''}
-                        onChange={(v) => handleFieldUpdate(selectedOrder.id, 'fees_percent', v)}
-                        placeholder="12.5"
-                        step="0.1"
-                      />
+
+                    {/* Row 2: Etsy Fee, After Fee, Supplier $ */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Fee (12%)</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-red-500">
+                          {etsyFee !== null ? `-$${etsyFee.toFixed(2)}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">After Fee</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                          {(afterSale !== null && etsyFee !== null) ? `$${(afterSale - etsyFee).toFixed(2)}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Supplier $</label>
+                        <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                          {supplierPrice ? `$${supplierPrice.toFixed(2)}` : '-'}
+                          {supplierName && (
+                            <span className="text-xs text-gray-400 ml-1">({supplierName})</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Product Cost</label>
-                      <EditableField
-                        type="number"
-                        value={selectedOrder.product_cost || ''}
-                        onChange={(v) => handleFieldUpdate(selectedOrder.id, 'product_cost', v)}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Amount to Pay</label>
-                      <EditableField
-                        type="number"
-                        value={selectedOrder.total_amount_to_pay || ''}
-                        onChange={(v) => handleFieldUpdate(selectedOrder.id, 'total_amount_to_pay', v)}
-                        placeholder="0.00"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Profit</label>
-                      <div className={`px-3 py-2 rounded-lg border bg-gray-50 text-center font-bold text-lg ${selectedOrder.profit && selectedOrder.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(selectedOrder.profit)}
+                    {/* Row 3: Profit $, Profit % */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Profit $</label>
+                        <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                          profit === null ? 'text-gray-400' : profit >= 0 ? 'text-green-700' : 'text-red-500'
+                        }`}>
+                          {profit !== null ? `$${profit.toFixed(2)}` : '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Profit %</label>
+                        <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
+                          profitPercent === null ? 'text-gray-400' : profit! >= 0 ? 'text-green-700' : 'text-red-500'
+                        }`}>
+                          {profitPercent !== null ? `${profitPercent}%` : '-'}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Amount to Pay - Visible to Supplier */}
               {!isAdmin && (
@@ -2225,7 +2578,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             <div className={`sticky bottom-0 px-6 py-4 border-t bg-gray-50 flex ${isAdmin ? 'justify-between' : 'justify-end'} items-center`}>
               {isAdmin && (
                 <button
-                  onClick={() => {
+                  onMouseDown={(e) => {
+                    e.preventDefault();
                     setSelectedOrder(null);
                     openDeleteConfirm(selectedOrder);
                   }}
@@ -2236,7 +2590,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 </button>
               )}
               <button
-                onClick={() => setSelectedOrder(null)}
+                onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
                 className="px-6 py-2 text-white rounded-lg font-medium transition-colors"
                 style={{ backgroundColor: BRAND_ORANGE }}
               >
@@ -2244,6 +2598,26 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* Image Lightbox */}
+      {enlargedImage && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 cursor-pointer"
+          onClick={() => setEnlargedImage(null)}
+        >
+          <img
+            src={enlargedImage}
+            alt=""
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setEnlargedImage(null)}
+            className="absolute top-4 right-4 p-2 text-white/80 hover:text-white bg-black/50 hover:bg-black/70 rounded-full transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
         </div>
       )}
     </div>

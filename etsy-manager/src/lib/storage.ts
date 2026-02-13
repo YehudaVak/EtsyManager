@@ -28,12 +28,12 @@ export async function uploadOrderImage(
       };
     }
 
-    // Validate file size (5MB max)
-    const maxSize = 5 * 1024 * 1024; // 5MB
+    // Validate file size (12MB max)
+    const maxSize = 12 * 1024 * 1024; // 12MB
     if (file.size > maxSize) {
       return {
         success: false,
-        error: 'File size exceeds 5MB limit.',
+        error: 'File size exceeds 12MB limit.',
       };
     }
 

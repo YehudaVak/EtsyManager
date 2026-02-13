@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { supabase, Product, ProductPricing, ProductWithPricing } from '@/lib/supabase';
+import { supabase, Product, ProductPricing, ProductVariation, ProductSupplier, ProductWithPricing } from '@/lib/supabase';
 import { uploadOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
 import StoreSelector from './StoreSelector';
@@ -25,6 +25,7 @@ import {
   ArrowUp,
   ArrowDown,
   Copy,
+  GripVertical,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -33,6 +34,7 @@ const BRAND_ORANGE = '#d96f36';
 // Product status options
 const PRODUCT_STATUSES = [
   { value: 'active', label: 'Active', bg: 'bg-green-100', text: 'text-green-700', dot: 'bg-green-500' },
+  { value: 'need_work', label: 'Need to Work On', bg: 'bg-yellow-100', text: 'text-yellow-700', dot: 'bg-yellow-500' },
   { value: 'to_quote', label: 'To Quote', bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' },
   { value: 'quotation_received', label: 'Quotation Received', bg: 'bg-sky-100', text: 'text-sky-700', dot: 'bg-sky-500' },
 ];
@@ -69,7 +71,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   const [bulkDeleteError, setBulkDeleteError] = useState('');
 
   // Status filter tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'to_quote' | 'quotation_received' | 'out_of_stock'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'need_work' | 'to_quote' | 'quotation_received' | 'out_of_stock'>('all');
 
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
@@ -81,7 +83,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   // Column widths for resizable columns
   const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
     rowNum: 50,
-    image: 70,
+    image: 110,
     name: 200,
     supplier: 120,
     subcategory: 100,
@@ -140,10 +142,20 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     }
   }, [selectedStore]);
 
-  const fetchProducts = async () => {
+  // Keep selectedProduct in sync when products state updates (e.g., after supplier CRUD)
+  useEffect(() => {
+    if (selectedProduct) {
+      const updated = products.find(p => p.id === selectedProduct.id);
+      if (updated && JSON.stringify(updated) !== JSON.stringify(selectedProduct)) {
+        setSelectedProduct(updated);
+      }
+    }
+  }, [products]);
+
+  const fetchProducts = async (silent = false) => {
     if (!selectedStore) return;
 
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const { data: productsData, error: productsError } = await supabase
         .from('products')
@@ -164,17 +176,29 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         const { data, error: variationsError } = await supabase
           .from('product_variations')
           .select('*')
-          .order('created_at', { ascending: true });
+          .order('sort_order', { ascending: true });
         if (!variationsError) variationsData = data || [];
       } catch {
         // product_variations table may not exist yet
       }
 
-      // Build all products with pricing and variations
+      let suppliersData: any[] = [];
+      try {
+        const { data, error: suppliersError } = await supabase
+          .from('product_suppliers')
+          .select('*')
+          .order('sort_order', { ascending: true });
+        if (!suppliersError) suppliersData = data || [];
+      } catch {
+        // product_suppliers table may not exist yet
+      }
+
+      // Build all products with pricing, variations, and suppliers
       const allProducts: ProductWithPricing[] = (productsData || []).map((product) => ({
         ...product,
         pricing: (pricingData || []).filter((p) => p.product_id === product.id),
         variations: variationsData.filter((v) => v.product_id === product.id),
+        suppliers: suppliersData.filter((s) => s.product_id === product.id),
       }));
 
       setProducts(allProducts);
@@ -226,6 +250,16 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         }
       }
 
+      // Auto-add Sain as default supplier for new products
+      await supabase.from('product_suppliers').insert([{
+        product_id: productData.id,
+        name: 'Sain',
+        price: 0,
+        is_selected: true,
+      }]);
+      // Sync default supplier to product
+      await supabase.from('products').update({ supplier_name: 'Sain' }).eq('id', productData.id);
+
       const validPricing = newPricing.filter((p) => p.country && p.price !== undefined);
       if (validPricing.length > 0) {
         const { error: pricingError } = await supabase
@@ -251,7 +285,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       setNewProductImagePreview(null);
       setNewPricing([{ country: 'US', price: 0, shipping_time: '' }]);
       setShowAddModal(false);
-      fetchProducts();
+      fetchProducts(true);
     } catch (error: any) {
       const msg = error?.message || error?.details || JSON.stringify(error);
       console.error('Error adding product:', msg);
@@ -307,9 +341,280 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         if (error) throw error;
       }
 
-      fetchProducts();
+      fetchProducts(true);
     } catch (error) {
       console.error('Error updating pricing:', error);
+    }
+  };
+
+  // ── Supplier handlers ──────────────────────────────────────────
+
+  const handleAddSupplier = async (productId: string) => {
+    try {
+      const product = products.find((p) => p.id === productId);
+      const hasSuppliers = product?.suppliers && product.suppliers.length > 0;
+
+      const nextOrder = product?.suppliers?.length || 0;
+      const { error } = await supabase.from('product_suppliers').insert([{
+        product_id: productId,
+        name: '',
+        price: 0,
+        is_selected: !hasSuppliers,
+        sort_order: nextOrder,
+      }]);
+      if (error) throw error;
+
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error adding supplier:', error);
+    }
+  };
+
+  const handleUpdateSupplier = async (
+    supplierId: string,
+    productId: string,
+    updates: Partial<ProductSupplier>
+  ) => {
+    try {
+      const { error } = await supabase
+        .from('product_suppliers')
+        .update(updates)
+        .eq('id', supplierId);
+      if (error) throw error;
+
+      // If this supplier is selected, sync changes to product
+      const product = products.find((p) => p.id === productId);
+      const supplier = product?.suppliers?.find((s) => s.id === supplierId);
+      if (supplier?.is_selected) {
+        const syncUpdates: Partial<Product> = {};
+        if (updates.name !== undefined) syncUpdates.supplier_name = updates.name;
+        if (updates.price !== undefined) syncUpdates.supplier_price = updates.price;
+        if (Object.keys(syncUpdates).length > 0) {
+          await supabase.from('products').update(syncUpdates).eq('id', productId);
+        }
+      }
+
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error updating supplier:', error);
+    }
+  };
+
+  const handleSelectSupplier = async (productId: string, supplierId: string) => {
+    try {
+      // Deselect all suppliers for this product
+      await supabase
+        .from('product_suppliers')
+        .update({ is_selected: false })
+        .eq('product_id', productId);
+
+      // Select the chosen supplier
+      await supabase
+        .from('product_suppliers')
+        .update({ is_selected: true })
+        .eq('id', supplierId);
+
+      // Sync to product table
+      const product = products.find((p) => p.id === productId);
+      const supplier = product?.suppliers?.find((s) => s.id === supplierId);
+      if (supplier) {
+        await supabase.from('products').update({
+          supplier_name: supplier.name,
+          supplier_price: supplier.price,
+        }).eq('id', productId);
+      }
+
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error selecting supplier:', error);
+    }
+  };
+
+  const handleDeleteSupplier = async (supplierId: string, productId: string) => {
+    try {
+      const product = products.find((p) => p.id === productId);
+      const supplier = product?.suppliers?.find((s) => s.id === supplierId);
+      const wasSelected = supplier?.is_selected;
+
+      const { error } = await supabase
+        .from('product_suppliers')
+        .delete()
+        .eq('id', supplierId);
+      if (error) throw error;
+
+      if (wasSelected) {
+        const remaining = product?.suppliers?.filter((s) => s.id !== supplierId);
+        if (remaining && remaining.length > 0) {
+          await supabase.from('product_suppliers')
+            .update({ is_selected: true })
+            .eq('id', remaining[0].id);
+          await supabase.from('products').update({
+            supplier_name: remaining[0].name,
+            supplier_price: remaining[0].price,
+          }).eq('id', productId);
+        } else {
+          await supabase.from('products').update({
+            supplier_name: null,
+            supplier_price: null,
+          }).eq('id', productId);
+        }
+      }
+
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error deleting supplier:', error);
+    }
+  };
+
+  const dragSupplierRef = useRef<{ dragIdx: number; overIdx: number } | null>(null);
+
+  const handleSupplierDragStart = (idx: number) => {
+    dragSupplierRef.current = { dragIdx: idx, overIdx: idx };
+  };
+
+  const handleSupplierDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    if (dragSupplierRef.current) {
+      dragSupplierRef.current.overIdx = idx;
+    }
+  };
+
+  const handleSupplierDrop = async (productId: string) => {
+    if (!dragSupplierRef.current) return;
+    const { dragIdx, overIdx } = dragSupplierRef.current;
+    dragSupplierRef.current = null;
+    if (dragIdx === overIdx) return;
+
+    const product = products.find((p) => p.id === productId);
+    if (!product?.suppliers) return;
+
+    // Reorder locally
+    const reordered = [...product.suppliers];
+    const [moved] = reordered.splice(dragIdx, 1);
+    reordered.splice(overIdx, 0, moved);
+
+    // Update sort_order for all suppliers
+    try {
+      await Promise.all(
+        reordered.map((s, i) =>
+          supabase.from('product_suppliers').update({ sort_order: i }).eq('id', s.id)
+        )
+      );
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error reordering suppliers:', error);
+    }
+  };
+
+  // ── Variation handlers ──────────────────────────────────────────
+
+  const handleAddVariation = async (productId: string) => {
+    try {
+      const product = products.find((p) => p.id === productId);
+      const nextOrder = product?.variations?.length || 0;
+      const { error } = await supabase.from('product_variations').insert([{
+        product_id: productId,
+        name: '',
+        price: product?.etsy_full_price || null,
+        sort_order: nextOrder,
+      }]);
+      if (error) {
+        console.error('Variation insert error:', error.message, error.details, error.hint);
+        throw error;
+      }
+      fetchProducts(true);
+    } catch (error: any) {
+      console.error('Error adding variation:', error?.message || error);
+    }
+  };
+
+  const handleUpdateVariation = async (
+    variationId: string,
+    updates: Partial<ProductVariation>
+  ) => {
+    try {
+      // Only send DB-safe fields
+      const dbUpdates: Record<string, any> = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.price !== undefined) dbUpdates.price = updates.price;
+      if (updates.image_url !== undefined) dbUpdates.image_url = updates.image_url;
+      if (updates.sort_order !== undefined) dbUpdates.sort_order = updates.sort_order;
+
+      const { error } = await supabase
+        .from('product_variations')
+        .update(dbUpdates)
+        .eq('id', variationId);
+      if (error) {
+        console.error('Variation update error:', error.message, error.details, error.hint);
+        throw error;
+      }
+      fetchProducts(true);
+    } catch (error: any) {
+      console.error('Error updating variation:', error?.message || error);
+    }
+  };
+
+  const handleDeleteVariation = async (variationId: string) => {
+    try {
+      const { error } = await supabase
+        .from('product_variations')
+        .delete()
+        .eq('id', variationId);
+      if (error) throw error;
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error deleting variation:', error);
+    }
+  };
+
+  const handleVariationImageUpload = async (variationId: string, file: File) => {
+    try {
+      const result = await uploadOrderImage(file, `variation_${variationId}`);
+      if (result.success && result.url) {
+        await handleUpdateVariation(variationId, { image_url: result.url });
+      } else if (result.error) {
+        alert(result.error);
+      }
+    } catch (error) {
+      console.error('Error uploading variation image:', error);
+    }
+  };
+
+  const dragVariationRef = useRef<{ dragIdx: number; overIdx: number } | null>(null);
+
+  const handleVariationDragStart = (idx: number) => {
+    dragVariationRef.current = { dragIdx: idx, overIdx: idx };
+  };
+
+  const handleVariationDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    if (dragVariationRef.current) {
+      dragVariationRef.current.overIdx = idx;
+    }
+  };
+
+  const handleVariationDrop = async (productId: string) => {
+    if (!dragVariationRef.current) return;
+    const { dragIdx, overIdx } = dragVariationRef.current;
+    dragVariationRef.current = null;
+    if (dragIdx === overIdx) return;
+
+    const product = products.find((p) => p.id === productId);
+    if (!product?.variations) return;
+
+    const reordered = [...product.variations];
+    const [moved] = reordered.splice(dragIdx, 1);
+    reordered.splice(overIdx, 0, moved);
+
+    try {
+      await Promise.all(
+        reordered.map((v, i) =>
+          supabase.from('product_variations').update({ sort_order: i }).eq('id', v.id)
+        )
+      );
+      fetchProducts(true);
+    } catch (error) {
+      console.error('Error reordering variations:', error);
     }
   };
 
@@ -396,7 +701,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         );
       }
 
-      fetchProducts();
+      fetchProducts(true);
     } catch (error: any) {
       console.error('Error duplicating product:', error?.message || error);
       alert(`Error duplicating product: ${error?.message || 'Unknown error'}`);
@@ -474,6 +779,8 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       const result = await uploadOrderImage(file, `product_${productId}`);
       if (result.success && result.url) {
         await handleUpdateProduct(productId, { image_url: result.url });
+      } else if (result.error) {
+        alert(result.error);
       }
     } catch (error) {
       console.error('Error uploading image:', error);
@@ -569,6 +876,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   const statusCounts = {
     all: products.length,
     active: products.filter(p => p.product_status === 'active').length,
+    need_work: products.filter(p => p.product_status === 'need_work').length,
     to_quote: products.filter(p => p.product_status === 'to_quote').length,
     quotation_received: products.filter(p => p.product_status === 'quotation_received').length,
     out_of_stock: products.filter(p => p.is_out_of_stock).length,
@@ -580,6 +888,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     .filter((product) => {
       // Status filter
       if (statusFilter === 'active' && product.product_status !== 'active') return false;
+      if (statusFilter === 'need_work' && product.product_status !== 'need_work') return false;
       if (statusFilter === 'to_quote' && product.product_status !== 'to_quote') return false;
       if (statusFilter === 'quotation_received' && product.product_status !== 'quotation_received') return false;
       if (statusFilter === 'out_of_stock' && !product.is_out_of_stock) return false;
@@ -752,6 +1061,21 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
             {statusCounts.active > 0 && (
               <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'active' ? 'bg-green-600' : 'bg-green-100 text-green-700'}`}>
                 {statusCounts.active}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('need_work')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'need_work'
+                ? 'bg-yellow-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-yellow-50 border border-gray-200'
+            }`}
+          >
+            Need to Work On
+            {statusCounts.need_work > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'need_work' ? 'bg-yellow-600' : 'bg-yellow-100 text-yellow-700'}`}>
+                {statusCounts.need_work}
               </span>
             )}
           </button>
@@ -973,12 +1297,12 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </td>
                       {/* Image */}
                       <td className="px-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative group/img mx-auto" style={{ width: 40, height: 40 }}>
+                        <div className="relative group/img mx-auto" style={{ width: 96, height: 96 }}>
                           {product.image_url ? (
-                            <img src={product.image_url} alt={product.name} className="w-10 h-10 object-cover rounded" />
+                            <img src={product.image_url} alt={product.name} className="w-24 h-24 object-cover rounded" />
                           ) : (
-                            <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center">
-                              <Camera className="w-4 h-4 text-gray-300" />
+                            <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center">
+                              <Camera className="w-7 h-7 text-gray-300" />
                             </div>
                           )}
                           <label className="absolute inset-0 cursor-pointer rounded overflow-hidden">
@@ -998,15 +1322,15 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                         </div>
                       </td>
                       {/* Product Name */}
-                      <td className="px-3 border-r border-gray-100">
-                        <div className="truncate text-sm font-medium text-gray-900">{product.name}</div>
+                      <td className="px-3 text-center border-r border-gray-100">
+                        <div className="line-clamp-2 text-base font-medium text-gray-900">{product.name}</div>
                       </td>
                       {/* Supplier */}
-                      <td className="px-3 text-sm text-gray-600 border-r border-gray-100 truncate">
+                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100 truncate">
                         {product.supplier_name || '-'}
                       </td>
                       {/* Subcategory */}
-                      <td className="px-3 text-sm text-gray-600 border-r border-gray-100 truncate">
+                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100 truncate">
                         {product.subcategory || '-'}
                       </td>
                       {/* Status */}
@@ -1014,19 +1338,19 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                         {getStatusBadge(product)}
                       </td>
                       {/* Etsy Price */}
-                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                      <td className="px-3 text-base text-gray-900 text-center border-r border-gray-100">
                         {formatCurrency(product.etsy_full_price)}
                       </td>
                       {/* Sale % */}
-                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100">
+                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100">
                         {product.sale_percent != null ? `${product.sale_percent}%` : '-'}
                       </td>
                       {/* US Price */}
-                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                      <td className="px-3 text-base text-gray-900 text-center border-r border-gray-100">
                         {getSupplierPrice(product)}
                       </td>
                       {/* Profit */}
-                      <td className="px-3 text-sm text-center border-r border-gray-100">
+                      <td className="px-3 text-base text-center border-r border-gray-100">
                         {(() => {
                           const profit = getProfit(product);
                           if (profit === '-') return <span className="text-gray-400">-</span>;
@@ -1040,9 +1364,9 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       {/* Out of Stock */}
                       <td className="px-3 text-center border-r border-gray-100">
                         {product.is_out_of_stock ? (
-                          <span className="text-red-500 text-xs font-bold">OOS</span>
+                          <span className="text-red-500 text-sm font-bold">OOS</span>
                         ) : (
-                          <span className="text-green-500 text-xs">OK</span>
+                          <span className="text-green-500 text-sm">OK</span>
                         )}
                       </td>
                       {/* Actions */}
@@ -1364,14 +1688,6 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">Supplier Name</label>
-                      <EditableField
-                        value={selectedProduct.supplier_name || ''}
-                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_name: String(v) })}
-                        placeholder="Enter supplier"
-                      />
-                    </div>
-                    <div>
                       <label className="block text-sm font-medium text-gray-600 mb-1">Material</label>
                       <EditableField
                         value={selectedProduct.material || ''}
@@ -1383,11 +1699,96 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
+              {/* ── SECTION: Variations ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Variations</h3>
+                  <button
+                    onClick={() => handleAddVariation(selectedProduct.id)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-white hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: BRAND_ORANGE }}
+                  >
+                    <Plus className="w-3 h-3" /> Add
+                  </button>
+                </div>
+
+                {(!selectedProduct.variations || selectedProduct.variations.length === 0) ? (
+                  <p className="text-sm text-gray-400 italic">No variations added yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {selectedProduct.variations.map((variation, idx) => (
+                      <div
+                        key={variation.id}
+                        draggable
+                        onDragStart={() => handleVariationDragStart(idx)}
+                        onDragOver={(e) => handleVariationDragOver(e, idx)}
+                        onDrop={() => handleVariationDrop(selectedProduct.id)}
+                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border bg-gray-50 border-gray-100"
+                      >
+                        <div className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 flex-shrink-0">
+                          <GripVertical className="w-4 h-4" />
+                        </div>
+                        {/* Variation image thumbnail */}
+                        <label className="relative w-10 h-10 flex-shrink-0 cursor-pointer group">
+                          {variation.image_url ? (
+                            <img src={variation.image_url} alt="" className="w-10 h-10 object-cover rounded" />
+                          ) : (
+                            <div className="w-10 h-10 bg-gray-200 rounded flex items-center justify-center">
+                              <Camera className="w-4 h-4 text-gray-400" />
+                            </div>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleVariationImageUpload(variation.id, file);
+                            }}
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center rounded">
+                            <Upload className="w-3 h-3 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </div>
+                        </label>
+                        {/* Name */}
+                        <div className="flex-1 min-w-0">
+                          <EditableField
+                            value={variation.name}
+                            onChange={(v) => handleUpdateVariation(variation.id, { name: String(v) })}
+                            placeholder="Variation name"
+                          />
+                        </div>
+                        {/* Price */}
+                        <div className="w-20">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">$</span>
+                            <EditableField
+                              type="number"
+                              value={variation.price || 0}
+                              onChange={(v) => handleUpdateVariation(variation.id, { price: parseFloat(String(v)) || 0 })}
+                              placeholder="0.00"
+                              className="pl-6"
+                            />
+                          </div>
+                        </div>
+                        {/* Delete */}
+                        <button
+                          onClick={() => handleDeleteVariation(variation.id)}
+                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* ── SECTION: Pricing ── */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
                 <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing</h3>
 
-                {/* My Pricing - row 1: editable fields, row 2: calculated fields */}
+                {/* Row 1: Etsy Price, Sale %, After Sale */}
                 <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Price</label>
@@ -1412,21 +1813,6 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">Supplier Price</label>
-                    <div className="relative">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">$</span>
-                      <EditableField
-                        type="number"
-                        value={selectedProduct.supplier_price || ''}
-                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { supplier_price: parseFloat(String(v)) || 0 })}
-                        placeholder="0.00"
-                        className="pl-7"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
-                  <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">After Sale</label>
                     <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
                       {(() => {
@@ -1435,6 +1821,9 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       })()}
                     </div>
                   </div>
+                </div>
+                {/* Row 2: Etsy Fee, After Fee, Supplier $ */}
+                <div className="grid grid-cols-3 gap-3 mt-2">
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">Etsy Fee (12%)</label>
                     <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-red-500">
@@ -1444,6 +1833,30 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       })()}
                     </div>
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">After Fee</label>
+                    <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                      {(() => {
+                        const afterSale = getAfterSalePrice(selectedProduct);
+                        const commission = getEtsyCommission(selectedProduct);
+                        return (afterSale !== null && commission !== null) ? `$${(afterSale - commission).toFixed(2)}` : '-';
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Supplier $</label>
+                    <div className="px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm text-gray-700">
+                      {selectedProduct.supplier_price
+                        ? `$${selectedProduct.supplier_price.toFixed(2)}`
+                        : '-'}
+                      {selectedProduct.supplier_name && (
+                        <span className="text-xs text-gray-400 ml-1">({selectedProduct.supplier_name})</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {/* Row 3: Profit $, Profit % */}
+                <div className="grid grid-cols-2 gap-3 mt-2">
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">Profit $</label>
                     <div className={`px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-center font-semibold text-sm ${
@@ -1509,6 +1922,82 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* ── SECTION: Suppliers ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Suppliers</h3>
+                  <button
+                    onClick={() => handleAddSupplier(selectedProduct.id)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-white hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: BRAND_ORANGE }}
+                  >
+                    <Plus className="w-3 h-3" /> Add
+                  </button>
+                </div>
+
+                {(!selectedProduct.suppliers || selectedProduct.suppliers.length === 0) ? (
+                  <p className="text-sm text-gray-400 italic">No suppliers added yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {selectedProduct.suppliers.map((supplier, idx) => (
+                      <div
+                        key={supplier.id}
+                        draggable
+                        onDragStart={() => handleSupplierDragStart(idx)}
+                        onDragOver={(e) => handleSupplierDragOver(e, idx)}
+                        onDrop={() => handleSupplierDrop(selectedProduct.id)}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${
+                          supplier.is_selected
+                            ? 'bg-orange-50 border-orange-200'
+                            : 'bg-gray-50 border-gray-100'
+                        }`}
+                      >
+                        <div className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 flex-shrink-0">
+                          <GripVertical className="w-4 h-4" />
+                        </div>
+                        <input
+                          type="radio"
+                          name={`supplier-${selectedProduct.id}`}
+                          checked={supplier.is_selected}
+                          onChange={() => handleSelectSupplier(selectedProduct.id, supplier.id)}
+                          className="w-4 h-4 cursor-pointer flex-shrink-0"
+                          style={{ accentColor: BRAND_ORANGE }}
+                        />
+                        <div className="w-32">
+                          <EditableField
+                            value={supplier.name}
+                            onChange={(v) =>
+                              handleUpdateSupplier(supplier.id, selectedProduct.id, { name: String(v) })
+                            }
+                            placeholder="Supplier name"
+                          />
+                        </div>
+                        <div className="w-20">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">$</span>
+                            <EditableField
+                              type="number"
+                              value={supplier.price}
+                              onChange={(v) =>
+                                handleUpdateSupplier(supplier.id, selectedProduct.id, { price: parseFloat(String(v)) || 0 })
+                              }
+                              placeholder="0.00"
+                              className="pl-6"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteSupplier(supplier.id, selectedProduct.id)}
+                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* ── SECTION: Links ── */}
