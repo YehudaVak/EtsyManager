@@ -16,3 +16,15 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+button,
+a[role="button"],
+select,
+[type="checkbox"],
+[type="radio"],
+label[for],
+label:has(input[type="file"]),
+summary,
+[role="button"] {
+  cursor: pointer !important;
+}
