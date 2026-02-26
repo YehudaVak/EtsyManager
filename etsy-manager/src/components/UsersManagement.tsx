@@ -157,9 +157,9 @@ export default function UsersManagement() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="px-4 py-4">
+        <div className="px-4 py-4 pl-14 lg:pl-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-1 justify-center lg:justify-start">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: BRAND_ORANGE }}>
                 <Users className="w-5 h-5 text-white" />
               </div>

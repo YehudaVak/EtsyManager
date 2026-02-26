@@ -778,9 +778,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className={`${headerBg} ${headerText} sticky top-0 z-50 shadow-sm`}>
-        <div className="px-4 py-3">
+        <div className="px-4 py-3 pl-14 lg:pl-4">
           <div className="flex items-center justify-between gap-4">
-            <h1 className="text-xl font-bold">
+            <h1 className="text-xl font-bold flex-1 text-center lg:text-left">
               {isAdmin ? 'Orders' : 'Supplier Orders'}
             </h1>
             <div className="flex items-center gap-2">

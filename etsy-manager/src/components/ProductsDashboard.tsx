@@ -984,8 +984,8 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     <div className="min-h-screen bg-gray-50">
       {/* ── Header ─────────────────────────────────────────────── */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="px-4 py-4">
-          <div className="flex items-center justify-between">
+        <div className="px-4 py-4 pl-14 lg:pl-4">
+          <div className="flex items-center justify-center lg:justify-start">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: BRAND_ORANGE }}>
                 <Package className="w-5 h-5 text-white" />
