@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase, Product, ProductPricing, ProductVariation, ProductSupplier, ProductWithPricing } from '@/lib/supabase';
 import { uploadOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import StoreSelector from './StoreSelector';
 import EditableField from './EditableField';
 import {
   Plus,
@@ -16,7 +15,6 @@ import {
   Clock,
   ExternalLink,
   AlertCircle,
-  ClipboardList,
   Upload,
   ImageIcon,
   CheckSquare,
@@ -27,7 +25,6 @@ import {
   Copy,
   GripVertical,
 } from 'lucide-react';
-import Link from 'next/link';
 
 const BRAND_ORANGE = '#d96f36';
 
@@ -37,6 +34,7 @@ const PRODUCT_STATUSES = [
   { value: 'need_work', label: 'Need to Work On', bg: 'bg-yellow-100', text: 'text-yellow-700', dot: 'bg-yellow-500' },
   { value: 'to_quote', label: 'To Quote', bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' },
   { value: 'quotation_received', label: 'Quotation Received', bg: 'bg-sky-100', text: 'text-sky-700', dot: 'bg-sky-500' },
+  { value: 'removed', label: 'Removed', bg: 'bg-gray-100', text: 'text-gray-700', dot: 'bg-gray-500' },
 ];
 
 // Common countries for pricing
@@ -71,7 +69,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   const [bulkDeleteError, setBulkDeleteError] = useState('');
 
   // Status filter tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'need_work' | 'to_quote' | 'quotation_received' | 'out_of_stock'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'need_work' | 'to_quote' | 'quotation_received' | 'removed' | 'out_of_stock'>('all');
 
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
@@ -879,6 +877,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     need_work: products.filter(p => p.product_status === 'need_work').length,
     to_quote: products.filter(p => p.product_status === 'to_quote').length,
     quotation_received: products.filter(p => p.product_status === 'quotation_received').length,
+    removed: products.filter(p => p.product_status === 'removed').length,
     out_of_stock: products.filter(p => p.is_out_of_stock).length,
   };
 
@@ -891,6 +890,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       if (statusFilter === 'need_work' && product.product_status !== 'need_work') return false;
       if (statusFilter === 'to_quote' && product.product_status !== 'to_quote') return false;
       if (statusFilter === 'quotation_received' && product.product_status !== 'quotation_received') return false;
+      if (statusFilter === 'removed' && product.product_status !== 'removed') return false;
       if (statusFilter === 'out_of_stock' && !product.is_out_of_stock) return false;
 
       // Search filter
@@ -986,29 +986,14 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
         <div className="px-4 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: BRAND_ORANGE }}>
                 <Package className="w-5 h-5 text-white" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-xl font-bold text-gray-900">Products Quotation</h1>
-                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                    isAdmin ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
-                  }`}>
-                    {isAdmin ? 'Admin' : 'Supplier'}
-                  </span>
-                </div>
+                <h1 className="text-xl font-bold text-gray-900">Products Quotation</h1>
                 <p className="text-sm text-gray-600">{products.length} products</p>
               </div>
-              <StoreSelector />
-              <Link
-                href={isAdmin ? '/admin/orders' : '/supplier/orders'}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
-              >
-                <ClipboardList className="w-4 h-4" />
-                Orders
-              </Link>
             </div>
           </div>
 
@@ -1106,6 +1091,21 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
             {statusCounts.quotation_received > 0 && (
               <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'quotation_received' ? 'bg-sky-600' : 'bg-sky-100 text-sky-700'}`}>
                 {statusCounts.quotation_received}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('removed')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'removed'
+                ? 'bg-gray-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
+            }`}
+          >
+            Removed
+            {statusCounts.removed > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'removed' ? 'bg-gray-600' : 'bg-gray-200 text-gray-700'}`}>
+                {statusCounts.removed}
               </span>
             )}
           </button>

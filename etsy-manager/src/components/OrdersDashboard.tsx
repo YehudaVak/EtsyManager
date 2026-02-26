@@ -5,9 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supabase';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import StoreSelector from './StoreSelector';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, LogOut, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload } from 'lucide-react';
-import Link from 'next/link';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload } from 'lucide-react';
 import EditableField from './EditableField';
 
 interface OrdersDashboardProps {
@@ -88,7 +86,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const startY = useRef<number>(0);
   const startHeight = useRef<number>(0);
 
-  const { user, selectedStore, isLoading: authLoading, logout } = useAuth();
+  const { user, selectedStore, isLoading: authLoading } = useAuth();
   const router = useRouter();
 
   // Check authentication
@@ -563,7 +561,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   }, [handleResizeMove, handleResizeEnd, handleRowResizeMove, handleRowResizeEnd]);
 
   // Helper functions for order status
-  const isNewOrder = (order: Order) => !order.is_paid; // Order is NEW until paid
+  const isNewOrder = (order: Order) => !order.is_paid && !order.is_shipped && !order.is_delivered; // Order is NEW until paid/shipped/delivered
   const needsTracking = (order: Order) => !order.tracking_number; // Needs tracking until supplier fills it
   const isOutOfStock = (order: Order) => order.is_out_of_stock;
 
@@ -782,32 +780,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       <header className={`${headerBg} ${headerText} sticky top-0 z-50 shadow-sm`}>
         <div className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold">
-                  {isAdmin ? 'Orders' : 'Supplier Orders'}
-                </h1>
-                <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                  isAdmin
-                    ? 'bg-orange-100 text-orange-700'
-                    : 'bg-blue-100 text-blue-700'
-                }`}>
-                  {isAdmin ? 'Admin' : 'Supplier'}
-                </span>
-              </div>
-              <StoreSelector />
-              <Link
-                href={isAdmin ? '/admin/products' : '/supplier/products'}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  isAdmin
-                    ? 'text-gray-600 hover:bg-gray-100'
-                    : 'text-blue-200 hover:bg-blue-700'
-                }`}
-              >
-                <ShoppingBag className="w-4 h-4" />
-                Products
-              </Link>
-            </div>
+            <h1 className="text-xl font-bold">
+              {isAdmin ? 'Orders' : 'Supplier Orders'}
+            </h1>
             <div className="flex items-center gap-2">
               <button
                 onClick={fetchOrders}
@@ -823,13 +798,6 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               >
                 <Plus className="w-5 h-5" />
                 <span className="hidden sm:inline">{isAdmin ? 'New Order' : 'New'}</span>
-              </button>
-              <button
-                onClick={logout}
-                className={`p-2 rounded-lg ${isAdmin ? 'text-gray-500 hover:bg-gray-100' : 'hover:bg-blue-700'}`}
-                title="Logout"
-              >
-                <LogOut className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -989,10 +957,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       {/* Desktop Table View - Simplified */}
       <div className="hidden lg:block p-4">
         <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
-          <div className="overflow-x-auto">
+          <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
             <table style={{ tableLayout: 'fixed', width: Math.max(Object.values(columnWidths).reduce((a, b) => a + b, 0) + 40, 0) }}>
               {/* Table Header */}
-              <thead>
+              <thead className="sticky top-0 z-20">
                 <tr style={{ backgroundColor: BRAND_ORANGE }}>
                   {/* Select All Checkbox */}
                   {isAdmin && (

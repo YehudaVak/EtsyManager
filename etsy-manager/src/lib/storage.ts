@@ -38,7 +38,7 @@ export async function uploadOrderImage(
     }
 
     // Generate unique filename with timestamp
-    const fileExt = file.name.split('.').pop();
+    const fileExt = file.name.split('.').pop()?.toLowerCase() || 'jpg';
     const fileName = `${orderId}_${Date.now()}.${fileExt}`;
     const filePath = `${fileName}`;
 
@@ -47,7 +47,7 @@ export async function uploadOrderImage(
       .from(BUCKET_NAME)
       .upload(filePath, file, {
         cacheControl: '3600',
-        upsert: false,
+        upsert: true,
       });
 
     if (error) {
