@@ -309,6 +309,23 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       if (selectedProduct && selectedProduct.id === productId) {
         setSelectedProduct((prev) => prev ? { ...prev, ...updates } : prev);
       }
+
+      // Propagate relevant fields to open orders linked to this product
+      const orderFields: Partial<Record<string, string>> = {};
+      if ('size' in updates) orderFields.size = updates.size || '';
+      if ('color' in updates) orderFields.color = updates.color || '';
+      if ('material' in updates) orderFields.material = updates.material || '';
+      if ('name' in updates) orderFields.product_name = updates.name || '';
+      if ('supplier_name' in updates) orderFields.order_from = updates.supplier_name || '';
+      if ('supplier_price' in updates) (orderFields as any).product_cost = updates.supplier_price;
+
+      if (Object.keys(orderFields).length > 0) {
+        await supabase
+          .from('orders')
+          .update(orderFields)
+          .eq('product_id', productId)
+          .eq('is_delivered', false);
+      }
     } catch (error) {
       console.error('Error updating product:', error);
     }

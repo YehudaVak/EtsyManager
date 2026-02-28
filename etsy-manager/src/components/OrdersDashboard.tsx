@@ -379,18 +379,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // WhatsApp copy helpers
   const buildOrderMessage = (order: Order): string => {
     const lines: string[] = [];
-    if (order.product_name) lines.push(`Product: ${order.product_name}`);
-    const variations: string[] = [];
-    if (order.size) variations.push(`Size: ${order.size}`);
-    if (order.color) variations.push(`Color: ${order.color}`);
-    if (order.material) variations.push(`Material: ${order.material}`);
-    if (variations.length > 0) lines.push(variations.join(' | '));
+    if (order.address) lines.push(order.address);
+    // Extract variation name from "Product – Variation" format
+    const variationName = order.product_name?.includes(' – ')
+      ? order.product_name.split(' – ').slice(1).join(' – ')
+      : null;
+    if (variationName) lines.push(variationName);
     lines.push(`Quantity: 1`);
-    if (order.address) {
-      lines.push('');
-      lines.push(`Ship to:`);
-      lines.push(order.address);
-    }
     return lines.join('\n');
   };
 
