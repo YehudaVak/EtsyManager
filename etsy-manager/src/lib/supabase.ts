@@ -35,6 +35,7 @@ export interface User {
   role: UserRole;
   store_id?: string; // NULL for master_admin
   full_name?: string;
+  phone?: string;
   is_active: boolean;
   settings?: Record<string, any>;
   last_login_at?: string;
@@ -48,6 +49,7 @@ export interface PublicUser {
   role: UserRole;
   store_id?: string;
   full_name?: string;
+  phone?: string;
   is_active: boolean;
 }
 
@@ -61,6 +63,7 @@ export interface Order {
   // Basic Order Info
   image_url?: string;
   ordered_date?: string;
+  ship_by?: string;
   product_name?: string;
   etsy_order_no?: string;
   customer_name?: string;
@@ -131,7 +134,7 @@ export type SupplierOrder = Omit<Order,
 // Columns to select for supplier (excludes financial except total_amount_to_pay)
 export const SUPPLIER_SELECT_COLUMNS = `
   id, created_at, updated_at,
-  image_url, ordered_date, product_name, etsy_order_no, customer_name, address,
+  image_url, ordered_date, ship_by, product_name, etsy_order_no, customer_name, address,
   product_link, size, color, material, notes,
   first_message_sent, total_amount_to_pay, tracking_number, is_paid, tracking_added,
   is_shipped, shipped_message_sent, is_completed_on_etsy,
@@ -152,6 +155,7 @@ export interface Product {
   description?: string;
   image_url?: string;
   product_link?: string;
+  etsy_listing_id?: string;
   supplier_link?: string;
   subcategory?: string;
 

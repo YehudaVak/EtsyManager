@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supabase';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload } from 'lucide-react';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy } from 'lucide-react';
 import EditableField from './EditableField';
 
 interface OrdersDashboardProps {
@@ -48,6 +48,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // Filter state for supplier status tabs
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock'>('all');
 
+  // WhatsApp copy toast
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
   const [productSearch, setProductSearch] = useState('');
@@ -58,6 +61,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     rowNum: 50,
     image: 110,
     date: 110,
+    shipBy: 110,
     productName: 200,
     orderNo: 180,
     customer: 170,
@@ -372,6 +376,62 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     }
   };
 
+  // WhatsApp copy helpers
+  const buildOrderMessage = (order: Order): string => {
+    const lines: string[] = [];
+    if (order.product_name) lines.push(`Product: ${order.product_name}`);
+    const variations: string[] = [];
+    if (order.size) variations.push(`Size: ${order.size}`);
+    if (order.color) variations.push(`Color: ${order.color}`);
+    if (order.material) variations.push(`Material: ${order.material}`);
+    if (variations.length > 0) lines.push(variations.join(' | '));
+    lines.push(`Quantity: 1`);
+    if (order.address) {
+      lines.push('');
+      lines.push(`Ship to:`);
+      lines.push(order.address);
+    }
+    return lines.join('\n');
+  };
+
+  const handleCopyImage = async (order: Order) => {
+    if (!order.image_url) {
+      setCopyToast('No image available');
+      setTimeout(() => setCopyToast(null), 2000);
+      return;
+    }
+    try {
+      const response = await fetch(order.image_url);
+      const blob = await response.blob();
+      const pngBlob = blob.type === 'image/png' ? blob : await new Promise<Blob>((resolve) => {
+        const img = document.createElement('img');
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext('2d')!.drawImage(img, 0, 0);
+          canvas.toBlob((b) => resolve(b!), 'image/png');
+        };
+        img.src = URL.createObjectURL(blob);
+      });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      setCopyToast('Image copied!');
+    } catch {
+      setCopyToast('Failed to copy image');
+    }
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
+  const handleCopyText = async (order: Order) => {
+    try {
+      await navigator.clipboard.writeText(buildOrderMessage(order));
+      setCopyToast('Text copied!');
+    } catch {
+      setCopyToast('Failed to copy text');
+    }
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
   const handleFieldUpdate = async (orderId: string, field: keyof Order, value: any) => {
     try {
       let updates: Partial<Order> = { [field]: value };
@@ -623,6 +683,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // Define columns for the table
   const columns = [
     { key: 'ordered_date', label: 'Ordered Date', type: 'date', minWidth: 130 },
+    { key: 'ship_by', label: 'Ship By', type: 'date', minWidth: 130 },
     { key: 'etsy_order_no', label: 'Etsy Order #', type: 'text', minWidth: 120 },
     { key: 'customer_name', label: 'Customer Name', type: 'text', minWidth: 150 },
     { key: 'address', label: 'Address', type: 'textarea', minWidth: 180 },
@@ -1010,6 +1071,23 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'date'); }}
                     />
                   </th>
+                  {/* Ship By */}
+                  <th
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    style={{ width: columnWidths.shipBy }}
+                    onClick={() => handleSort('ship_by')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Ship By
+                      {sortConfig.key === 'ship_by' ? (
+                        sortConfig.direction === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                      ) : <ArrowUpDown className="w-3 h-3 opacity-50" />}
+                    </div>
+                    <div
+                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30"
+                      onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'shipBy'); }}
+                    />
+                  </th>
                   {/* Product Name */}
                   <th
                     className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
@@ -1266,7 +1344,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       </td>
                       {/* Image */}
                       <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative w-24 h-24 mx-auto group/img">
+                        <div className="relative w-24 h-24 mx-auto group/img" data-product-search>
                           {order.image_url ? (
                             <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded" />
                           ) : (
@@ -1288,9 +1366,93 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               <Camera className="w-4 h-4 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" />
                             </div>
                           </label>
+                          {/* Quick-fix product button */}
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setProductDropdownOpen(productDropdownOpen === `inline_${order.id}` ? null : `inline_${order.id}`);
+                              setProductSearch('');
+                            }}
+                            className="absolute -top-1 -right-1 w-6 h-6 bg-white border border-gray-300 rounded-full flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity shadow-sm hover:bg-orange-50 hover:border-orange-400 z-10"
+                            title="Change product"
+                          >
+                            <Pencil className="w-3 h-3 text-gray-600" />
+                          </button>
                           {uploadingImage === order.id && (
                             <div className="absolute inset-0 bg-black/50 rounded flex items-center justify-center">
                               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                            </div>
+                          )}
+                          {/* Inline product dropdown */}
+                          {productDropdownOpen === `inline_${order.id}` && (
+                            <div className="absolute z-50 top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                              <div className="p-2 border-b">
+                                <input
+                                  type="text"
+                                  value={productSearch}
+                                  onChange={(e) => setProductSearch(e.target.value)}
+                                  placeholder="Search products..."
+                                  className="w-full px-2 py-1.5 border rounded text-sm text-gray-900 focus:ring-2 focus:ring-orange-500"
+                                  autoFocus
+                                />
+                              </div>
+                              <div className="max-h-60 overflow-y-auto">
+                                {products
+                                  .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
+                                  .map((product) => (
+                                    <button
+                                      key={product.id}
+                                      onClick={() => {
+                                        handleSelectProduct(order.id, product.id);
+                                        setProductDropdownOpen(null);
+                                        setProductSearch('');
+                                      }}
+                                      className={`w-full text-left px-2 py-1.5 text-xs hover:bg-blue-50 transition-colors flex items-center gap-2 ${
+                                        order.product_id === product.id ? 'bg-blue-50 font-medium' : ''
+                                      }`}
+                                    >
+                                      {product.image_url ? (
+                                        <img src={product.image_url} alt="" className="w-10 h-10 object-cover rounded flex-shrink-0" />
+                                      ) : (
+                                        <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+                                          <Package className="w-4 h-4 text-gray-400" />
+                                        </div>
+                                      )}
+                                      <span className="line-clamp-2">{product.name}</span>
+                                    </button>
+                                  ))}
+                              </div>
+                              {/* Inline variation picker */}
+                              {(() => {
+                                const selectedProd = products.find(p => p.id === order.product_id);
+                                if (selectedProd?.variations && selectedProd.variations.length > 0) {
+                                  return (
+                                    <div className="border-t p-2 flex flex-wrap gap-1">
+                                      {selectedProd.variations.map((v) => (
+                                        <button
+                                          key={v.id}
+                                          onClick={() => {
+                                            handleSelectVariation(order.id, v.id);
+                                            setProductDropdownOpen(null);
+                                          }}
+                                          className={`flex items-center gap-1 px-1.5 py-1 rounded border text-xs transition-colors ${
+                                            order.variation_id === v.id
+                                              ? 'border-orange-400 bg-orange-50'
+                                              : 'border-gray-200 hover:border-blue-300'
+                                          }`}
+                                        >
+                                          {v.image_url && (
+                                            <img src={v.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
+                                          )}
+                                          <span>{v.name}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                           )}
                         </div>
@@ -1298,6 +1460,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       {/* Date */}
                       <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
                         {formatDate(order.ordered_date)}
+                      </td>
+                      {/* Ship By */}
+                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                        {formatDate(order.ship_by)}
                       </td>
                       {/* Product Name */}
                       <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
@@ -1590,7 +1756,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         />
                       </div>
                       {productDropdownOpen === order.id && (
-                        <div className="absolute z-50 left-3 right-3 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                        <div className="absolute z-50 left-3 right-3 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
                           {products
                             .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
                             .map((product) => (
@@ -1601,14 +1767,18 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                                   setProductDropdownOpen(null);
                                   setProductSearch('');
                                 }}
-                                className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-2 ${
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-3 ${
                                   order.product_id === product.id ? 'bg-blue-50 font-medium' : ''
                                 }`}
                               >
-                                {product.image_url && (
-                                  <img src={product.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
+                                {product.image_url ? (
+                                  <img src={product.image_url} alt="" className="w-12 h-12 object-cover rounded flex-shrink-0" />
+                                ) : (
+                                  <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+                                    <Package className="w-5 h-5 text-gray-400" />
+                                  </div>
                                 )}
-                                <span className="truncate">{product.name}</span>
+                                <span className="line-clamp-2">{product.name}</span>
                               </button>
                             ))}
                           {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
@@ -1616,23 +1786,36 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                           )}
                         </div>
                       )}
-                      {/* Variation picker */}
+                      {/* Variation picker - visual grid */}
                       {(() => {
                         const selectedProd = products.find(p => p.id === order.product_id);
                         if (selectedProd?.variations && selectedProd.variations.length > 0) {
                           return (
-                            <select
-                              value={order.variation_id || ''}
-                              onChange={(e) => handleSelectVariation(order.id, e.target.value)}
-                              className="w-full mt-2 px-3 py-2 border border-blue-300 rounded-lg text-gray-900 bg-white focus:ring-2 focus:ring-blue-500"
-                            >
-                              <option value="">-- Select variation --</option>
+                            <div className="mt-2 flex flex-wrap gap-2">
                               {selectedProd.variations.map((v) => (
-                                <option key={v.id} value={v.id}>
-                                  {v.name} {v.price ? `- $${v.price}` : ''}
-                                </option>
+                                <button
+                                  key={v.id}
+                                  onClick={() => handleSelectVariation(order.id, v.id)}
+                                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border text-sm transition-colors ${
+                                    order.variation_id === v.id
+                                      ? 'border-orange-400 bg-orange-50 ring-2 ring-orange-300'
+                                      : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50'
+                                  }`}
+                                >
+                                  {v.image_url ? (
+                                    <img src={v.image_url} alt="" className="w-10 h-10 object-cover rounded flex-shrink-0" />
+                                  ) : (
+                                    <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+                                      <Package className="w-4 h-4 text-gray-400" />
+                                    </div>
+                                  )}
+                                  <div className="text-left">
+                                    <div className="font-medium text-gray-900">{v.name}</div>
+                                    {v.price && <div className="text-xs text-gray-500">${v.price}</div>}
+                                  </div>
+                                </button>
                               ))}
-                            </select>
+                            </div>
                           );
                         }
                         return null;
@@ -1649,6 +1832,17 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         onChange={(v) => handleFieldUpdate(order.id, 'ordered_date', v)}
                       />
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-900 mb-1">Ship By</label>
+                      <EditableField
+                        type="date"
+                        value={order.ship_by || ''}
+                        onChange={(v) => handleFieldUpdate(order.id, 'ship_by', v)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-gray-900 mb-1">Product Name</label>
                       <input
@@ -2070,7 +2264,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
             {/* Modal Content */}
             <div className="p-6 space-y-6">
-              {/* Top Row: Order Date + Etsy Order # */}
+              {/* Top Row: Order Date + Ship By + Etsy Order # */}
               <div className="flex items-end gap-4">
                 <div className="w-32">
                   <label className="block text-xs font-medium text-gray-500 mb-1">Order Date</label>
@@ -2078,6 +2272,14 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     type="date"
                     value={selectedOrder.ordered_date || ''}
                     onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ordered_date', v)}
+                  />
+                </div>
+                <div className="w-32">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Ship By</label>
+                  <EditableField
+                    type="date"
+                    value={selectedOrder.ship_by || ''}
+                    onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ship_by', v)}
                   />
                 </div>
                 <div className="w-40">
@@ -2125,7 +2327,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     )}
                   </div>
                   {productDropdownOpen === selectedOrder.id && (
-                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto">
                       {products
                         .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
                         .map((product) => (
@@ -2136,14 +2338,18 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               setProductDropdownOpen(null);
                               setProductSearch('');
                             }}
-                            className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-2 ${
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors flex items-center gap-3 ${
                               selectedOrder.product_id === product.id ? 'bg-blue-50 font-medium' : ''
                             }`}
                           >
-                            {product.image_url && (
-                              <img src={product.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
+                            {product.image_url ? (
+                              <img src={product.image_url} alt="" className="w-12 h-12 object-cover rounded flex-shrink-0" />
+                            ) : (
+                              <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+                                <Package className="w-5 h-5 text-gray-400" />
+                              </div>
                             )}
-                            <span className="truncate">{product.name}</span>
+                            <span className="line-clamp-2">{product.name}</span>
                           </button>
                         ))}
                       {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
@@ -2151,23 +2357,36 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       )}
                     </div>
                   )}
-                  {/* Variation picker */}
+                  {/* Variation picker - visual grid */}
                   {(() => {
                     const selectedProd = products.find(p => p.id === selectedOrder.product_id);
                     if (selectedProd?.variations && selectedProd.variations.length > 0) {
                       return (
-                        <select
-                          value={selectedOrder.variation_id || ''}
-                          onChange={(e) => handleSelectVariation(selectedOrder.id, e.target.value)}
-                          className="w-full mt-2 px-3 py-2 border border-blue-200 rounded-lg text-sm text-gray-900 bg-blue-50 focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">-- Select variation --</option>
+                        <div className="mt-2 flex flex-wrap gap-2">
                           {selectedProd.variations.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.name} {v.price ? `- $${v.price}` : ''}
-                            </option>
+                            <button
+                              key={v.id}
+                              onClick={() => handleSelectVariation(selectedOrder.id, v.id)}
+                              className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border text-sm transition-colors ${
+                                selectedOrder.variation_id === v.id
+                                  ? 'border-orange-400 bg-orange-50 ring-2 ring-orange-300'
+                                  : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50'
+                              }`}
+                            >
+                              {v.image_url ? (
+                                <img src={v.image_url} alt="" className="w-10 h-10 object-cover rounded flex-shrink-0" />
+                              ) : (
+                                <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
+                                  <Package className="w-4 h-4 text-gray-400" />
+                                </div>
+                              )}
+                              <div className="text-left">
+                                <div className="font-medium text-gray-900">{v.name}</div>
+                                {v.price && <div className="text-xs text-gray-500">${v.price}</div>}
+                              </div>
+                            </button>
                           ))}
-                        </select>
+                        </div>
                       );
                     }
                     return null;
@@ -2543,7 +2762,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             </div>
 
             {/* Modal Footer */}
-            <div className={`sticky bottom-0 px-6 py-4 border-t bg-gray-50 flex ${isAdmin ? 'justify-between' : 'justify-end'} items-center`}>
+            <div className={`sticky bottom-0 px-6 py-4 border-t bg-gray-50 flex ${isAdmin ? 'justify-between' : 'justify-end'} items-center gap-2`}>
               {isAdmin && (
                 <button
                   onMouseDown={(e) => {
@@ -2557,13 +2776,41 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   Delete Order
                 </button>
               )}
-              <button
-                onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
-                className="px-6 py-2 text-white rounded-lg font-medium transition-colors"
-                style={{ backgroundColor: BRAND_ORANGE }}
-              >
-                Done
-              </button>
+              <div className="flex items-center gap-2">
+                {isAdmin && (
+                  <>
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleCopyImage(selectedOrder);
+                      }}
+                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                      title="Copy product image to clipboard"
+                    >
+                      <Image className="w-4 h-4" />
+                      Copy Image
+                    </button>
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleCopyText(selectedOrder);
+                      }}
+                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                      title="Copy order details to clipboard"
+                    >
+                      <ClipboardCopy className="w-4 h-4" />
+                      Copy Text
+                    </button>
+                  </>
+                )}
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
+                  className="px-6 py-2 text-white rounded-lg font-medium transition-colors"
+                  style={{ backgroundColor: BRAND_ORANGE }}
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2586,6 +2833,12 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
           >
             <X className="w-6 h-6" />
           </button>
+        </div>
+      )}
+      {/* Copy Toast */}
+      {copyToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 bg-gray-900 text-white rounded-lg shadow-lg text-sm font-medium animate-fade-in">
+          {copyToast}
         </div>
       )}
     </div>

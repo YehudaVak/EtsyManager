@@ -232,6 +232,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
           is_active: newProduct.is_active,
           is_out_of_stock: newProduct.is_out_of_stock,
           product_link: newProduct.product_link,
+          etsy_listing_id: newProduct.etsy_listing_id,
         }])
         .select()
         .single();
@@ -2048,7 +2049,16 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     <div className="flex-1">
                       <EditableField
                         value={selectedProduct.product_link || ''}
-                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { product_link: String(v) })}
+                        onChange={(v) => {
+                          const url = String(v);
+                          const updates: Partial<Product> = { product_link: url };
+                          // Auto-extract listing ID from Etsy URL
+                          const match = url.match(/\/listing\/(\d+)/);
+                          if (match) {
+                            updates.etsy_listing_id = match[1];
+                          }
+                          handleUpdateProduct(selectedProduct.id, updates);
+                        }}
                         placeholder="https://www.etsy.com/listing/..."
                       />
                     </div>
@@ -2059,6 +2069,11 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </a>
                     )}
                   </div>
+                  {selectedProduct.etsy_listing_id && (
+                    <span className="inline-block mt-1 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                      Listing ID: {selectedProduct.etsy_listing_id}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -2301,7 +2316,13 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
               <div>
                 <label className="block text-sm font-medium text-gray-900 mb-1">Etsy Link</label>
-                <input type="url" value={newProduct.product_link || ''} onChange={(e) => setNewProduct({ ...newProduct, product_link: e.target.value })}
+                <input type="url" value={newProduct.product_link || ''} onChange={(e) => {
+                  const url = e.target.value;
+                  const updates: Partial<Product> = { product_link: url };
+                  const match = url.match(/\/listing\/(\d+)/);
+                  if (match) updates.etsy_listing_id = match[1];
+                  setNewProduct({ ...newProduct, ...updates });
+                }}
                   placeholder="https://www.etsy.com/listing/..." className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500" />
               </div>
 
