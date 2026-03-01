@@ -122,7 +122,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     material: '',
     product_status: 'active',
     etsy_full_price: undefined,
-    sale_percent: 30,
+    sale_percent: 35,
     is_active: true,
     is_out_of_stock: false,
   });
@@ -229,7 +229,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
           material: newProduct.material,
           product_status: newProduct.product_status || 'active',
           etsy_full_price: newProduct.etsy_full_price || null,
-          sale_percent: newProduct.sale_percent ?? 30,
+          sale_percent: newProduct.sale_percent ?? 35,
           is_active: newProduct.is_active,
           is_out_of_stock: newProduct.is_out_of_stock,
           product_link: newProduct.product_link,
@@ -278,7 +278,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       setNewProduct({
         name: '', description: '', variants: '', subcategory: '',
         supplier_name: '', supplier_link: '', size: '', color: '', material: '',
-        product_status: 'active', etsy_full_price: undefined, sale_percent: 30,
+        product_status: 'active', etsy_full_price: undefined, sale_percent: 35,
         is_active: true, is_out_of_stock: false,
       });
       setNewProductImage(null);
@@ -733,7 +733,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
           material: product.material,
           product_status: product.product_status || 'active',
           etsy_full_price: product.etsy_full_price || null,
-          sale_percent: product.sale_percent ?? 30,
+          sale_percent: product.sale_percent ?? 35,
           is_active: product.is_active,
           is_out_of_stock: product.is_out_of_stock,
           product_link: product.product_link,
@@ -981,7 +981,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   const getAfterSalePrice = (product: ProductWithPricing) => {
     if (!product.etsy_full_price) return null;
-    return product.etsy_full_price * (1 - (product.sale_percent ?? 30) / 100);
+    return product.etsy_full_price * (1 - (product.sale_percent ?? 35) / 100);
   };
 
   const getEtsyCommission = (product: ProductWithPricing) => {
@@ -1878,7 +1878,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     <label className="block text-sm font-medium text-gray-600 mb-1">Sale %</label>
                     <EditableField
                       type="number"
-                      value={selectedProduct.sale_percent ?? 30}
+                      value={selectedProduct.sale_percent ?? 35}
                       onChange={(v) => handleUpdateProduct(selectedProduct.id, { sale_percent: Number(v) || 0 })}
                       step="1"
                     />
@@ -2426,7 +2426,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 <div>
                   <label className="block text-sm font-medium text-gray-900 mb-1">Sale %</label>
                   <div className="flex items-center gap-1">
-                    <input type="number" step="1" value={newProduct.sale_percent ?? 30}
+                    <input type="number" step="1" value={newProduct.sale_percent ?? 35}
                       onChange={(e) => setNewProduct({ ...newProduct, sale_percent: parseFloat(e.target.value) || 0 })}
                       placeholder="30" className="w-full px-3 py-2 border rounded-lg text-gray-900 focus:ring-2 focus:ring-orange-500" />
                     <span className="text-gray-500">%</span>
@@ -2436,7 +2436,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                   <label className="block text-sm font-medium text-gray-900 mb-1">Price After Sale</label>
                   <div className="px-3 py-2 border rounded-lg bg-gray-50 text-center font-semibold text-green-700">
                     {newProduct.etsy_full_price
-                      ? `$${(newProduct.etsy_full_price * (1 - (newProduct.sale_percent ?? 30) / 100)).toFixed(2)}`
+                      ? `$${(newProduct.etsy_full_price * (1 - (newProduct.sale_percent ?? 35) / 100)).toFixed(2)}`
                       : '-'}
                   </div>
                 </div>

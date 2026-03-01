@@ -648,7 +648,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         order.customer_name?.toLowerCase().includes(search) ||
         order.product_name?.toLowerCase().includes(search) ||
         order.etsy_order_no?.toLowerCase().includes(search) ||
-        order.address?.toLowerCase().includes(search)
+        order.address?.toLowerCase().includes(search) ||
+        order.tracking_number?.toLowerCase().includes(search)
       );
     })
     .sort((a, b) => {
