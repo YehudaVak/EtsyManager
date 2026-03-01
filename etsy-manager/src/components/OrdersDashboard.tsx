@@ -46,7 +46,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
   // Filter state for supplier status tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'issue'>('all');
 
   // WhatsApp copy toast
   const [copyToast, setCopyToast] = useState<string | null>(null);
@@ -629,6 +629,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     shipped: orders.filter(order => order.is_shipped).length,
     delivered: orders.filter(order => order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
+    issue: orders.filter(order => !!order.issue).length,
   };
 
   const filteredOrders = orders
@@ -640,6 +641,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'shipped' && !order.is_shipped) return false;
       if (statusFilter === 'delivered' && !order.is_delivered) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
+      if (statusFilter === 'issue' && !order.issue) return false;
 
       // Then apply search filter
       if (!searchTerm) return true;
@@ -979,6 +981,21 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             {statusCounts.out_of_stock > 0 && (
               <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'out_of_stock' ? 'bg-red-600' : 'bg-red-100 text-red-700'}`}>
                 {statusCounts.out_of_stock}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('issue')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'issue'
+                ? 'bg-red-600 text-white'
+                : 'bg-white text-gray-700 hover:bg-red-50 border border-gray-200'
+            }`}
+          >
+            Action Needed
+            {statusCounts.issue > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-xs bg-red-600 text-white">
+                {statusCounts.issue}
               </span>
             )}
           </button>
