@@ -74,6 +74,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
 
   // Sort
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'desc' });
@@ -289,6 +290,44 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       const msg = error?.message || error?.details || JSON.stringify(error);
       console.error('Error adding product:', msg);
       alert(`Error adding product: ${msg}`);
+    }
+  };
+
+  const showToast = (msg: string) => {
+    setCopyToast(msg);
+    setTimeout(() => setCopyToast(null), 2000);
+  };
+
+  const handleCopyProductImage = async (product: ProductWithPricing) => {
+    if (!product.image_url) { showToast('No image available'); return; }
+    try {
+      const response = await fetch(product.image_url);
+      const blob = await response.blob();
+      const pngBlob = blob.type === 'image/png' ? blob : await new Promise<Blob>((resolve) => {
+        const img = document.createElement('img');
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext('2d')!.drawImage(img, 0, 0);
+          canvas.toBlob((b) => resolve(b!), 'image/png');
+        };
+        img.src = URL.createObjectURL(blob);
+      });
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      showToast('Image copied!');
+    } catch {
+      showToast('Failed to copy image');
+    }
+  };
+
+  const handleCopySupplierLink = async (product: ProductWithPricing) => {
+    if (!product.supplier_link) { showToast('No 1688 link'); return; }
+    try {
+      await navigator.clipboard.writeText(product.supplier_link);
+      showToast('Link copied!');
+    } catch {
+      showToast('Failed to copy link');
     }
   };
 
@@ -1591,6 +1630,20 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               </h2>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <button
+                  onClick={() => handleCopyProductImage(selectedProduct)}
+                  className="p-1.5 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
+                  title="Copy image to clipboard"
+                >
+                  <ImageIcon className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => handleCopySupplierLink(selectedProduct)}
+                  className="p-1.5 text-white/80 hover:text-white hover:bg-white/20 rounded-lg transition-colors"
+                  title="Copy 1688 link to clipboard"
+                >
+                  <Copy className="w-5 h-5" />
+                </button>
+                <button
                   onClick={() => setSelectedProduct(null)}
                   className="px-4 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-sm font-medium transition-colors"
                 >
@@ -2521,6 +2574,12 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
           >
             <X className="w-6 h-6" />
           </button>
+        </div>
+      )}
+      {/* Copy Toast */}
+      {copyToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 bg-gray-900 text-white rounded-lg shadow-lg text-sm font-medium">
+          {copyToast}
         </div>
       )}
     </div>

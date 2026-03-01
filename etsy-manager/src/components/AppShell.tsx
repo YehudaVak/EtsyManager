@@ -18,7 +18,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen overflow-x-hidden">
       <Sidebar />
       <main
         className={`transition-all duration-300 ${
