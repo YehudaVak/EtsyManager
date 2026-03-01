@@ -1084,6 +1084,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'date'); }}
                     />
                   </th>
+                  {/* Quantity */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] bg-[#d96f36]" style={{ width: 60 }}>
+                    Qty
+                  </th>
                   {/* Ship By */}
                   <th
                     className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
@@ -1473,6 +1477,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       {/* Date */}
                       <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
                         {formatDate(order.ordered_date)}
+                      </td>
+                      {/* Quantity */}
+                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                        {(order.quantity ?? 1) > 1
+                          ? <span className="font-semibold text-orange-600">×{order.quantity}</span>
+                          : <span className="text-gray-400">1</span>
+                        }
                       </td>
                       {/* Ship By */}
                       <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
