@@ -75,6 +75,7 @@ export interface Order {
   color?: string;
   material?: string;
   notes?: string;
+  quantity?: number;
 
   // Communication Status
   first_message_sent?: boolean;

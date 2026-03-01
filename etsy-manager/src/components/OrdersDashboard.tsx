@@ -385,7 +385,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       ? order.product_name.split(' – ').slice(1).join(' – ')
       : null;
     if (variationName) lines.push(variationName);
-    lines.push(`Quantity: 1`);
+    lines.push(`Quantity: ${order.quantity ?? 1}`);
     return lines.join('\n');
   };
 
@@ -1069,7 +1069,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Date */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.date }}
                     onClick={() => handleSort('ordered_date')}
                   >
@@ -1086,7 +1086,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Ship By */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.shipBy }}
                     onClick={() => handleSort('ship_by')}
                   >
@@ -1103,7 +1103,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Product Name */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.productName }}
                     onClick={() => handleSort('product_name')}
                   >
@@ -1120,7 +1120,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Tracking Number */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.orderNo }}
                     onClick={() => handleSort('tracking_number')}
                   >
@@ -1137,7 +1137,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Customer */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.customer }}
                     onClick={() => handleSort('customer_name')}
                   >
@@ -1186,7 +1186,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Paid */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.paid }}
                     onClick={() => handleSort('is_paid')}
                   >
@@ -1203,7 +1203,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Shipped */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.shipped }}
                     onClick={() => handleSort('is_shipped')}
                   >
@@ -1220,7 +1220,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </th>
                   {/* Delivered */}
                   <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                     style={{ width: columnWidths.delivered }}
                     onClick={() => handleSort('is_delivered')}
                   >
@@ -1238,7 +1238,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   {/* Amount to Pay (Supplier view) */}
                   {!isAdmin && (
                     <th
-                      className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                      className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                       style={{ width: 100 }}
                       onClick={() => handleSort('total_amount_to_pay')}
                     >
@@ -1253,7 +1253,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   {/* Profit (Admin only) */}
                   {isAdmin && (
                     <th
-                      className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                      className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer bg-[#d96f36] hover:bg-[#c45f2a] transition-colors"
                       style={{ width: columnWidths.profit }}
                       onClick={() => handleSort('profit')}
                     >
@@ -1726,6 +1726,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   <span>{formatDate(order.ordered_date) !== '-' ? formatDate(order.ordered_date) : 'No date'}</span>
                   {order.customer_name && <span>• {order.customer_name}</span>}
                   {order.order_from && <span>• {order.order_from}</span>}
+                  {(order.quantity ?? 1) > 1 && <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold">×{order.quantity}</span>}
                 </div>
 
                 {/* Prices */}
@@ -2538,14 +2539,25 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 </div>
               </div>
 
-              {/* Tracking */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Tracking Number</label>
-                <EditableField
-                  value={selectedOrder.tracking_number || ''}
-                  onChange={(v) => handleFieldUpdate(selectedOrder.id, 'tracking_number', v)}
-                  placeholder="Enter tracking number"
-                />
+              {/* Quantity + Tracking */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+                  <EditableField
+                    type="number"
+                    value={String(selectedOrder.quantity ?? 1)}
+                    onChange={(v) => handleFieldUpdate(selectedOrder.id, 'quantity', parseInt(String(v)) || 1)}
+                    placeholder="1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tracking Number</label>
+                  <EditableField
+                    value={selectedOrder.tracking_number || ''}
+                    onChange={(v) => handleFieldUpdate(selectedOrder.id, 'tracking_number', v)}
+                    placeholder="Enter tracking number"
+                  />
+                </div>
               </div>
 
               {/* Address - Full Width with Resizable */}
