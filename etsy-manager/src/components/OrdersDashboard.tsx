@@ -51,6 +51,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // WhatsApp copy toast
   const [copyToast, setCopyToast] = useState<string | null>(null);
 
+  // Order group popover (shows all items with same etsy_order_no)
+  const [orderGroupPopover, setOrderGroupPopover] = useState<string | null>(null);
+
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
   const [productSearch, setProductSearch] = useState('');
@@ -124,6 +127,19 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [productDropdownOpen]);
+
+  // Close order group popover on outside click
+  useEffect(() => {
+    if (!orderGroupPopover) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-order-group]')) {
+        setOrderGroupPopover(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [orderGroupPopover]);
 
   const fetchOrders = async () => {
     if (!selectedStore) return;
@@ -664,6 +680,15 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
       return 0;
     });
+
+  // Map etsy_order_no → all orders with that number (from ALL orders, not just filtered)
+  const orderGroupMap = orders.reduce<Record<string, Order[]>>((acc, order) => {
+    const key = order.etsy_order_no;
+    if (!key) return acc;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(order);
+    return acc;
+  }, {});
 
   const formatCurrency = (value?: number) => {
     if (value === undefined || value === null) return '';
@@ -1503,8 +1528,40 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       </td>
                       {/* Customer */}
                       <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        <div className="line-clamp-2" title={order.customer_name || ''}>
-                          {order.customer_name || '-'}
+                        <div className="flex flex-col items-center gap-1">
+                          <div className="line-clamp-2" title={order.customer_name || ''}>
+                            {order.customer_name || '-'}
+                          </div>
+                          {order.etsy_order_no && (orderGroupMap[order.etsy_order_no]?.length ?? 0) > 1 && (
+                            <div className="relative" data-order-group onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => setOrderGroupPopover(orderGroupPopover === order.id ? null : order.id)}
+                                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors"
+                              >
+                                {orderGroupMap[order.etsy_order_no].length} items
+                                <ChevronDown className="w-3 h-3" />
+                              </button>
+                              {orderGroupPopover === order.id && (
+                                <div className="absolute z-50 top-full mt-1 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[200px] max-w-[280px] p-2">
+                                  <div className="text-xs font-semibold text-gray-500 mb-1.5 px-1">Order #{order.etsy_order_no}</div>
+                                  {orderGroupMap[order.etsy_order_no].map((siblingOrder) => (
+                                    <div
+                                      key={siblingOrder.id}
+                                      className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs ${siblingOrder.id === order.id ? 'bg-orange-50 font-semibold text-orange-800' : 'text-gray-700 hover:bg-gray-50'}`}
+                                    >
+                                      {siblingOrder.image_url && (
+                                        <img src={siblingOrder.image_url} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
+                                      )}
+                                      <span className="line-clamp-2">{siblingOrder.product_name || '(no name)'}</span>
+                                      {(siblingOrder.quantity ?? 1) > 1 && (
+                                        <span className="ml-auto flex-shrink-0 font-bold text-orange-600">×{siblingOrder.quantity}</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </td>
                       {/* Address */}
@@ -1733,11 +1790,41 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 </div>
 
                 {/* Date + Customer + Supplier */}
-                <div className="flex items-center gap-3 text-xs text-gray-500">
+                <div className="flex items-center flex-wrap gap-2 text-xs text-gray-500">
                   <span>{formatDate(order.ordered_date) !== '-' ? formatDate(order.ordered_date) : 'No date'}</span>
                   {order.customer_name && <span>• {order.customer_name}</span>}
                   {order.order_from && <span>• {order.order_from}</span>}
                   {(order.quantity ?? 1) > 1 && <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold">×{order.quantity}</span>}
+                  {order.etsy_order_no && (orderGroupMap[order.etsy_order_no]?.length ?? 0) > 1 && (
+                    <div className="relative" data-order-group onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => setOrderGroupPopover(orderGroupPopover === `mob-${order.id}` ? null : `mob-${order.id}`)}
+                        className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors"
+                      >
+                        {orderGroupMap[order.etsy_order_no].length} items
+                        <ChevronDown className="w-2.5 h-2.5" />
+                      </button>
+                      {orderGroupPopover === `mob-${order.id}` && (
+                        <div className="absolute z-50 bottom-full mb-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[180px] max-w-[260px] p-2">
+                          <div className="text-xs font-semibold text-gray-500 mb-1.5 px-1">Order #{order.etsy_order_no}</div>
+                          {orderGroupMap[order.etsy_order_no].map((siblingOrder) => (
+                            <div
+                              key={siblingOrder.id}
+                              className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs ${siblingOrder.id === order.id ? 'bg-orange-50 font-semibold text-orange-800' : 'text-gray-700 hover:bg-gray-50'}`}
+                            >
+                              {siblingOrder.image_url && (
+                                <img src={siblingOrder.image_url} alt="" className="w-6 h-6 rounded object-cover flex-shrink-0" />
+                              )}
+                              <span className="line-clamp-2">{siblingOrder.product_name || '(no name)'}</span>
+                              {(siblingOrder.quantity ?? 1) > 1 && (
+                                <span className="ml-auto flex-shrink-0 font-bold text-orange-600">×{siblingOrder.quantity}</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Prices */}
