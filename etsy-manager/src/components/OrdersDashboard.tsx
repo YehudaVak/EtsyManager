@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supabase';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
@@ -51,8 +51,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // WhatsApp copy toast
   const [copyToast, setCopyToast] = useState<string | null>(null);
 
-  // Order group popover (shows all items with same etsy_order_no)
-  const [orderGroupPopover, setOrderGroupPopover] = useState<string | null>(null);
+  // Expanded order groups (etsy_order_no keys)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
@@ -128,18 +128,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [productDropdownOpen]);
 
-  // Close order group popover on outside click
-  useEffect(() => {
-    if (!orderGroupPopover) return;
-    const handleClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('[data-order-group]')) {
-        setOrderGroupPopover(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [orderGroupPopover]);
+
 
   const fetchOrders = async () => {
     if (!selectedStore) return;
@@ -402,6 +391,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       : null;
     if (variationName) lines.push(variationName);
     lines.push(`Quantity: ${order.quantity ?? 1}`);
+    // VAT details
+    if (order.has_vat && (order.vat_number || order.vat_amount)) {
+      lines.push('');
+      lines.push('VAT Details:');
+      if (order.vat_number) lines.push(`VAT Number: ${order.vat_number}`);
+      if (order.vat_amount) lines.push(`Value: ${order.vat_amount}`);
+    }
     return lines.join('\n');
   };
 
@@ -681,14 +677,40 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       return 0;
     });
 
-  // Map etsy_order_no → all orders with that number (from ALL orders, not just filtered)
-  const orderGroupMap = orders.reduce<Record<string, Order[]>>((acc, order) => {
-    const key = order.etsy_order_no;
-    if (!key) return acc;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(order);
-    return acc;
-  }, {});
+  // Group filtered orders: multi-item orders (same etsy_order_no) become one group row
+  type OrderGroup = { type: 'single'; order: Order } | { type: 'group'; key: string; orders: Order[] };
+  const groupedOrders: OrderGroup[] = (() => {
+    const seen = new Set<string>();
+    const groups: OrderGroup[] = [];
+    for (const order of filteredOrders) {
+      const key = order.etsy_order_no;
+      if (!key) {
+        groups.push({ type: 'single', order });
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const siblings = filteredOrders.filter(o => o.etsy_order_no === key);
+      if (siblings.length === 1) {
+        groups.push({ type: 'single', order });
+      } else {
+        groups.push({ type: 'group', key, orders: siblings });
+      }
+    }
+    return groups;
+  })();
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Total column count for colSpan
+  const totalColumns = isAdmin ? 19 : 15;
 
   const formatCurrency = (value?: number) => {
     if (value === undefined || value === null) return '';
@@ -1311,7 +1333,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               <tbody>
                 {filteredOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 17 : 15} className="px-4 py-12 text-center text-gray-500">
+                    <td colSpan={totalColumns} className="px-4 py-12 text-center text-gray-500">
                       No orders yet.{' '}
                       <button onClick={handleAddOrder} className="text-[#d96f36] hover:underline font-medium">
                         Create your first order
@@ -1319,338 +1341,229 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     </td>
                   </tr>
                 ) : (
-                  filteredOrders.map((order, index) => (
-                    <tr
-                      key={order.id}
-                      className={`border-b-2 border-gray-200 hover:bg-orange-50 cursor-pointer transition-colors relative group ${isNewOrder(order) ? 'bg-orange-50/50' : ''} ${selectedOrders.has(order.id) ? 'bg-orange-100' : ''}`}
-                      style={{ height: rowHeights[order.id] || defaultRowHeight }}
-                      onClick={() => {
-                        setSelectedOrder(order);
-                        acknowledgeOrder(order);
-                      }}
-                    >
-                      {/* Row Checkbox */}
-                      {isAdmin && (
-                        <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedOrders.has(order.id)}
-                            onChange={() => toggleSelectOrder(order.id)}
-                            className={checkboxStyle}
-                          />
-                        </td>
-                      )}
-                      {/* Row number */}
-                      <td className="px-3 py-3 text-center text-base font-medium text-gray-600 border-r border-gray-100 relative">
-                        {index + 1}
-                        {/* Row resize handle */}
-                        <div
-                          className="absolute left-0 bottom-0 w-full h-1 cursor-row-resize hover:bg-[#d96f36]/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                          onMouseDown={(e) => { e.stopPropagation(); handleRowResizeStart(e, order.id); }}
-                        />
-                      </td>
-                      {/* Status badges */}
-                      <td className="px-2 py-3 text-center border-r border-gray-100">
-                        <div className="flex flex-col items-center gap-1">
-                          {isNewOrder(order) && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
-                              NEW
-                            </span>
+                  groupedOrders.map((item, groupIndex) => {
+                    // --- Single order row (unchanged) ---
+                    if (item.type === 'single') {
+                      const order = item.order;
+                      const index = filteredOrders.indexOf(order);
+                      return (
+                        <tr
+                          key={order.id}
+                          className={`border-b-2 border-gray-200 hover:bg-orange-50 cursor-pointer transition-colors relative group ${isNewOrder(order) ? 'bg-orange-50/50' : ''} ${selectedOrders.has(order.id) ? 'bg-orange-100' : ''}`}
+                          style={{ height: rowHeights[order.id] || defaultRowHeight }}
+                          onClick={() => { setSelectedOrder(order); acknowledgeOrder(order); }}
+                        >
+                          {isAdmin && (
+                            <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                              <input type="checkbox" checked={selectedOrders.has(order.id)} onChange={() => toggleSelectOrder(order.id)} className={checkboxStyle} />
+                            </td>
                           )}
-                          {isOutOfStock(order) && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-                              OUT
-                            </span>
-                          )}
-                          {needsTracking(order) && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                              TRACK
-                            </span>
-                          )}
-                          {order.is_paid && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                              PAID
-                            </span>
-                          )}
-                          {order.is_shipped && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                              SHIPPED
-                            </span>
-                          )}
-                          {order.is_delivered && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">
-                              DELIVERED
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      {/* Image */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative w-24 h-24 mx-auto group/img" data-product-search>
-                          {order.image_url ? (
-                            <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded" />
-                          ) : (
-                            <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300">
-                              <Camera className="w-4 h-4 text-gray-400" />
+                          <td className="px-3 py-3 text-center text-base font-medium text-gray-600 border-r border-gray-100 relative">
+                            {index + 1}
+                            <div className="absolute left-0 bottom-0 w-full h-1 cursor-row-resize hover:bg-[#d96f36]/30 opacity-0 group-hover:opacity-100 transition-opacity" onMouseDown={(e) => { e.stopPropagation(); handleRowResizeStart(e, order.id); }} />
+                          </td>
+                          <td className="px-2 py-3 text-center border-r border-gray-100">
+                            <div className="flex flex-col items-center gap-1">
+                              {isNewOrder(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>}
+                              {isOutOfStock(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>}
+                              {needsTracking(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">TRACK</span>}
+                              {order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">PAID</span>}
+                              {order.is_shipped && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
+                              {order.is_delivered && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">DELIVERED</span>}
                             </div>
-                          )}
-                          <label className="absolute inset-0 cursor-pointer rounded overflow-hidden">
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) handleImageUpload(order.id, file, order.image_url);
-                              }}
-                            />
-                            <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-colors flex items-center justify-center">
-                              <Camera className="w-4 h-4 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" />
-                            </div>
-                          </label>
-                          {/* Quick-fix product button */}
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setProductDropdownOpen(productDropdownOpen === `inline_${order.id}` ? null : `inline_${order.id}`);
-                              setProductSearch('');
-                            }}
-                            className="absolute -top-1 -right-1 w-6 h-6 bg-white border border-gray-300 rounded-full flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity shadow-sm hover:bg-orange-50 hover:border-orange-400 z-10"
-                            title="Change product"
-                          >
-                            <Pencil className="w-3 h-3 text-gray-600" />
-                          </button>
-                          {uploadingImage === order.id && (
-                            <div className="absolute inset-0 bg-black/50 rounded flex items-center justify-center">
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                            </div>
-                          )}
-                          {/* Inline product dropdown */}
-                          {productDropdownOpen === `inline_${order.id}` && (
-                            <div className="absolute z-50 top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                              <div className="p-2 border-b">
-                                <input
-                                  type="text"
-                                  value={productSearch}
-                                  onChange={(e) => setProductSearch(e.target.value)}
-                                  placeholder="Search products..."
-                                  className="w-full px-2 py-1.5 border rounded text-sm text-gray-900 focus:ring-2 focus:ring-orange-500"
-                                  autoFocus
-                                />
-                              </div>
-                              <div className="max-h-60 overflow-y-auto">
-                                {products
-                                  .filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase()))
-                                  .map((product) => (
-                                    <button
-                                      key={product.id}
-                                      onClick={() => {
-                                        handleSelectProduct(order.id, product.id);
-                                        setProductDropdownOpen(null);
-                                        setProductSearch('');
-                                      }}
-                                      className={`w-full text-left px-2 py-1.5 text-xs hover:bg-blue-50 transition-colors flex items-center gap-2 ${
-                                        order.product_id === product.id ? 'bg-blue-50 font-medium' : ''
-                                      }`}
-                                    >
-                                      {product.image_url ? (
-                                        <img src={product.image_url} alt="" className="w-10 h-10 object-cover rounded flex-shrink-0" />
-                                      ) : (
-                                        <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center flex-shrink-0">
-                                          <Package className="w-4 h-4 text-gray-400" />
-                                        </div>
-                                      )}
-                                      <span className="line-clamp-2">{product.name}</span>
-                                    </button>
-                                  ))}
-                              </div>
-                              {/* Inline variation picker */}
-                              {(() => {
-                                const selectedProd = products.find(p => p.id === order.product_id);
-                                if (selectedProd?.variations && selectedProd.variations.length > 0) {
-                                  return (
-                                    <div className="border-t p-2 flex flex-wrap gap-1">
-                                      {selectedProd.variations.map((v) => (
-                                        <button
-                                          key={v.id}
-                                          onClick={() => {
-                                            handleSelectVariation(order.id, v.id);
-                                            setProductDropdownOpen(null);
-                                          }}
-                                          className={`flex items-center gap-1 px-1.5 py-1 rounded border text-xs transition-colors ${
-                                            order.variation_id === v.id
-                                              ? 'border-orange-400 bg-orange-50'
-                                              : 'border-gray-200 hover:border-blue-300'
-                                          }`}
-                                        >
-                                          {v.image_url && (
-                                            <img src={v.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />
-                                          )}
-                                          <span>{v.name}</span>
-                                        </button>
-                                      ))}
-                                    </div>
-                                  );
-                                }
-                                return null;
-                              })()}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      {/* Date */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        {formatDate(order.ordered_date)}
-                      </td>
-                      {/* Quantity */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        {(order.quantity ?? 1) > 1
-                          ? <span className="font-semibold text-orange-600">×{order.quantity}</span>
-                          : <span className="text-gray-400">1</span>
-                        }
-                      </td>
-                      {/* Ship By */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        {formatDate(order.ship_by)}
-                      </td>
-                      {/* Product Name */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        <div className="line-clamp-2" title={order.product_name || ''}>
-                          {order.product_name || '-'}
-                        </div>
-                      </td>
-                      {/* Tracking Number */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 font-medium border-r border-gray-100">
-                        <div className="line-clamp-2" title={order.tracking_number || ''}>
-                          {order.tracking_number || '-'}
-                        </div>
-                      </td>
-                      {/* Customer */}
-                      <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
-                        <div className="flex flex-col items-center gap-1">
-                          <div className="line-clamp-2" title={order.customer_name || ''}>
-                            {order.customer_name || '-'}
-                          </div>
-                          {order.etsy_order_no && (orderGroupMap[order.etsy_order_no]?.length ?? 0) > 1 && (
-                            <div className="relative" data-order-group onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() => setOrderGroupPopover(orderGroupPopover === order.id ? null : order.id)}
-                                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors"
-                              >
-                                {orderGroupMap[order.etsy_order_no].length} items
-                                <ChevronDown className="w-3 h-3" />
-                              </button>
-                              {orderGroupPopover === order.id && (
-                                <div className="absolute z-50 top-full mt-1 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[200px] max-w-[280px] p-2">
-                                  <div className="text-xs font-semibold text-gray-500 mb-1.5 px-1">Order #{order.etsy_order_no}</div>
-                                  {orderGroupMap[order.etsy_order_no].map((siblingOrder) => (
-                                    <div
-                                      key={siblingOrder.id}
-                                      className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs ${siblingOrder.id === order.id ? 'bg-orange-50 font-semibold text-orange-800' : 'text-gray-700 hover:bg-gray-50'}`}
-                                    >
-                                      {siblingOrder.image_url && (
-                                        <img src={siblingOrder.image_url} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
-                                      )}
-                                      <span className="line-clamp-2">{siblingOrder.product_name || '(no name)'}</span>
-                                      {(siblingOrder.quantity ?? 1) > 1 && (
-                                        <span className="ml-auto flex-shrink-0 font-bold text-orange-600">×{siblingOrder.quantity}</span>
-                                      )}
-                                    </div>
-                                  ))}
+                          </td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                            <div className="relative w-24 h-24 mx-auto group/img" data-product-search>
+                              {order.image_url ? (
+                                <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded" />
+                              ) : (
+                                <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300"><Camera className="w-4 h-4 text-gray-400" /></div>
+                              )}
+                              <label className="absolute inset-0 cursor-pointer rounded overflow-hidden">
+                                <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageUpload(order.id, file, order.image_url); }} />
+                                <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-colors flex items-center justify-center"><Camera className="w-4 h-4 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" /></div>
+                              </label>
+                              <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setProductDropdownOpen(productDropdownOpen === `inline_${order.id}` ? null : `inline_${order.id}`); setProductSearch(''); }} className="absolute -top-1 -right-1 w-6 h-6 bg-white border border-gray-300 rounded-full flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity shadow-sm hover:bg-orange-50 hover:border-orange-400 z-10" title="Change product"><Pencil className="w-3 h-3 text-gray-600" /></button>
+                              {uploadingImage === order.id && <div className="absolute inset-0 bg-black/50 rounded flex items-center justify-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div></div>}
+                              {productDropdownOpen === `inline_${order.id}` && (
+                                <div className="absolute z-50 top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                                  <div className="p-2 border-b"><input type="text" value={productSearch} onChange={(e) => setProductSearch(e.target.value)} placeholder="Search products..." className="w-full px-2 py-1.5 border rounded text-sm text-gray-900 focus:ring-2 focus:ring-orange-500" autoFocus /></div>
+                                  <div className="max-h-60 overflow-y-auto">
+                                    {products.filter(p => !productSearch || p.name.toLowerCase().includes(productSearch.toLowerCase())).map((product) => (
+                                      <button key={product.id} onClick={() => { handleSelectProduct(order.id, product.id); setProductDropdownOpen(null); setProductSearch(''); }} className={`w-full text-left px-2 py-1.5 text-xs hover:bg-blue-50 transition-colors flex items-center gap-2 ${order.product_id === product.id ? 'bg-blue-50 font-medium' : ''}`}>
+                                        {product.image_url ? <img src={product.image_url} alt="" className="w-10 h-10 object-cover rounded flex-shrink-0" /> : <div className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center flex-shrink-0"><Package className="w-4 h-4 text-gray-400" /></div>}
+                                        <span className="line-clamp-2">{product.name}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {(() => { const selectedProd = products.find(p => p.id === order.product_id); if (selectedProd?.variations && selectedProd.variations.length > 0) { return (<div className="border-t p-2 flex flex-wrap gap-1">{selectedProd.variations.map((v) => (<button key={v.id} onClick={() => { handleSelectVariation(order.id, v.id); setProductDropdownOpen(null); }} className={`flex items-center gap-1 px-1.5 py-1 rounded border text-xs transition-colors ${order.variation_id === v.id ? 'border-orange-400 bg-orange-50' : 'border-gray-200 hover:border-blue-300'}`}>{v.image_url && <img src={v.image_url} alt="" className="w-8 h-8 object-cover rounded flex-shrink-0" />}<span>{v.name}</span></button>))}</div>); } return null; })()}
                                 </div>
                               )}
                             </div>
+                          </td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(order.ordered_date)}</td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{(order.quantity ?? 1) > 1 ? <span className="font-semibold text-orange-600">×{order.quantity}</span> : <span className="text-gray-400">1</span>}</td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(order.ship_by)}</td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.product_name || ''}>{order.product_name || '-'}</div></td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 font-medium border-r border-gray-100"><div className="line-clamp-2" title={order.tracking_number || ''}>{order.tracking_number || '-'}</div></td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.customer_name || ''}>{order.customer_name || '-'}</div></td>
+                          <td className="px-3 py-3 text-center text-base text-gray-700 border-r border-gray-100"><div className="line-clamp-2" title={order.address || ''}>{order.address || '-'}</div></td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100">{order.size ? <span className="inline-block bg-blue-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">{order.size}</span> : '-'}</td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100">{order.color ? <span className="inline-block bg-gray-200 text-gray-900 px-2 py-1 rounded text-sm font-medium">{order.color}</span> : '-'}</td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100">{order.material ? <span className="inline-block bg-green-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">{order.material}</span> : '-'}</td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_paid || false} onChange={(e) => handleFieldUpdate(order.id, 'is_paid', e.target.checked)} className={checkboxStyle} /></td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_shipped || false} onChange={(e) => handleFieldUpdate(order.id, 'is_shipped', e.target.checked)} className={checkboxStyle} /></td>
+                          <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_delivered || false} onChange={(e) => handleFieldUpdate(order.id, 'is_delivered', e.target.checked)} className={checkboxStyle} /></td>
+                          {!isAdmin && <td className="px-3 py-3 text-center border-r border-gray-100"><span className="text-sm font-semibold text-blue-600">{formatCurrency(order.total_amount_to_pay)}</span></td>}
+                          {isAdmin && <td className="px-3 py-3 text-center border-r border-gray-100"><span className={`text-sm font-semibold ${order.profit && order.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(order.profit)}</span></td>}
+                          {isAdmin && <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}><button onClick={() => openDeleteConfirm(order)} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete order"><Trash2 className="w-4 h-4" /></button></td>}
+                        </tr>
+                      );
+                    }
+
+                    // --- Multi-item order group ---
+                    const { key, orders: groupOrders } = item;
+                    const firstOrder = groupOrders[0];
+                    const isExpanded = expandedGroups.has(key);
+                    return (
+                      <React.Fragment key={`group-${key}`}>
+                        {/* Group header row */}
+                        <tr
+                          className="border-b-2 border-gray-200 cursor-pointer transition-colors hover:bg-orange-50/70"
+                          style={{ borderLeft: `4px solid ${BRAND_ORANGE}`, backgroundColor: '#fef3ec' }}
+                          onClick={() => toggleGroup(key)}
+                        >
+                          {/* Checkbox */}
+                          {isAdmin && (
+                            <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={groupOrders.every(o => selectedOrders.has(o.id))}
+                                onChange={() => {
+                                  const allSelected = groupOrders.every(o => selectedOrders.has(o.id));
+                                  setSelectedOrders(prev => {
+                                    const next = new Set(prev);
+                                    groupOrders.forEach(o => allSelected ? next.delete(o.id) : next.add(o.id));
+                                    return next;
+                                  });
+                                }}
+                                className={checkboxStyle}
+                              />
+                            </td>
                           )}
-                        </div>
-                      </td>
-                      {/* Address */}
-                      <td className="px-3 py-3 text-center text-base text-gray-700 border-r border-gray-100">
-                        <div className="line-clamp-2" title={order.address || ''}>
-                          {order.address || '-'}
-                        </div>
-                      </td>
-                      {/* Size */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100">
-                        {order.size ? (
-                          <span className="inline-block bg-blue-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">
-                            {order.size}
-                          </span>
-                        ) : '-'}
-                      </td>
-                      {/* Color */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100">
-                        {order.color ? (
-                          <span className="inline-block bg-gray-200 text-gray-900 px-2 py-1 rounded text-sm font-medium">
-                            {order.color}
-                          </span>
-                        ) : '-'}
-                      </td>
-                      {/* Material */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100">
-                        {order.material ? (
-                          <span className="inline-block bg-green-100 text-gray-900 px-2 py-1 rounded text-sm font-medium">
-                            {order.material}
-                          </span>
-                        ) : '-'}
-                      </td>
-                      {/* Paid */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={order.is_paid || false}
-                          onChange={(e) => handleFieldUpdate(order.id, 'is_paid', e.target.checked)}
-                          className={checkboxStyle}
-                        />
-                      </td>
-                      {/* Shipped */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={order.is_shipped || false}
-                          onChange={(e) => handleFieldUpdate(order.id, 'is_shipped', e.target.checked)}
-                          className={checkboxStyle}
-                        />
-                      </td>
-                      {/* Delivered */}
-                      <td className="px-3 py-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={order.is_delivered || false}
-                          onChange={(e) => handleFieldUpdate(order.id, 'is_delivered', e.target.checked)}
-                          className={checkboxStyle}
-                        />
-                      </td>
-                      {/* Amount to Pay (Supplier view) */}
-                      {!isAdmin && (
-                        <td className="px-3 py-3 text-center border-r border-gray-100">
-                          <span className="text-sm font-semibold text-blue-600">
-                            {formatCurrency(order.total_amount_to_pay)}
-                          </span>
-                        </td>
-                      )}
-                      {/* Profit (admin only) */}
-                      {isAdmin && (
-                        <td className="px-3 py-3 text-center border-r border-gray-100">
-                          <span className={`text-sm font-semibold ${order.profit && order.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {formatCurrency(order.profit)}
-                          </span>
-                        </td>
-                      )}
-                      {/* Actions (Admin only) */}
-                      {isAdmin && (
-                        <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => openDeleteConfirm(order)}
-                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                            title="Delete order"
+                          {/* # - chevron */}
+                          <td className="px-3 py-3 text-center text-base font-medium text-gray-600 border-r border-gray-100">
+                            {isExpanded ? <ChevronUp className="w-4 h-4 mx-auto" style={{ color: BRAND_ORANGE }} /> : <ChevronDown className="w-4 h-4 mx-auto" style={{ color: BRAND_ORANGE }} />}
+                          </td>
+                          {/* Status */}
+                          <td className="px-2 py-3 text-center border-r border-gray-100">
+                            <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ backgroundColor: BRAND_ORANGE }}>{groupOrders.length} items</span>
+                          </td>
+                          {/* Image - first product */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100">
+                            {firstOrder.image_url ? (
+                              <img src={firstOrder.image_url} alt="" className="w-24 h-24 object-cover rounded mx-auto" />
+                            ) : (
+                              <div className="w-24 h-24 bg-gray-100 rounded flex items-center justify-center mx-auto border border-dashed border-gray-300">
+                                <Camera className="w-4 h-4 text-gray-400" />
+                              </div>
+                            )}
+                          </td>
+                          {/* Date */}
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(firstOrder.ordered_date)}</td>
+                          {/* Qty */}
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"></td>
+                          {/* Ship By */}
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(firstOrder.ship_by)}</td>
+                          {/* Product Name - order # */}
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                            <span className="text-sm text-gray-500">#{key}</span>
+                          </td>
+                          {/* Tracking */}
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"></td>
+                          {/* Customer */}
+                          <td className="px-3 py-3 text-center text-base font-bold text-gray-900 border-r border-gray-100">
+                            <div className="line-clamp-2">{firstOrder.customer_name || '-'}</div>
+                          </td>
+                          {/* Address */}
+                          <td className="px-3 py-3 text-center text-base text-gray-700 border-r border-gray-100">
+                            <div className="line-clamp-2" title={firstOrder.address || ''}>{firstOrder.address || '-'}</div>
+                          </td>
+                          {/* Size */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Color */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Material */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Paid */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Shipped */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Delivered */}
+                          <td className="px-3 py-3 text-center border-r border-gray-100"></td>
+                          {/* Amount / Profit */}
+                          {!isAdmin && <td className="px-3 py-3 text-center border-r border-gray-100"></td>}
+                          {isAdmin && <td className="px-3 py-3 text-center border-r border-gray-100"></td>}
+                          {/* Actions */}
+                          {isAdmin && <td className="px-3 py-3 text-center"></td>}
+                        </tr>
+                        {/* Expanded child rows */}
+                        {isExpanded && groupOrders.map((order) => (
+                          <tr
+                            key={order.id}
+                            className="border-b border-orange-200 hover:bg-orange-100/60 cursor-pointer transition-colors relative group"
+                            style={{ borderLeft: `4px solid ${BRAND_ORANGE}`, height: rowHeights[order.id] || defaultRowHeight, backgroundColor: '#fff7f0' }}
+                            onClick={() => { setSelectedOrder(order); acknowledgeOrder(order); }}
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))
+                            {isAdmin && (
+                              <td className="px-3 py-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                                <input type="checkbox" checked={selectedOrders.has(order.id)} onChange={() => toggleSelectOrder(order.id)} className={checkboxStyle} />
+                              </td>
+                            )}
+                            <td className="px-3 py-2 text-center text-sm text-gray-400 border-r border-gray-100">
+                              <span className="text-xs">•</span>
+                            </td>
+                            <td className="px-2 py-2 text-center border-r border-gray-100">
+                              <div className="flex flex-col items-center gap-1">
+                                {isNewOrder(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">NEW</span>}
+                                {isOutOfStock(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">OUT</span>}
+                                {needsTracking(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700">TRACK</span>}
+                                {order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">PAID</span>}
+                                {order.is_shipped && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
+                                {order.is_delivered && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-100 text-teal-700">DELIVERED</span>}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                              <div className="relative w-20 h-20 mx-auto group/img" data-product-search>
+                                {order.image_url ? <img src={order.image_url} alt="" className="w-20 h-20 object-cover rounded" /> : <div className="w-20 h-20 bg-gray-100 rounded flex items-center justify-center border border-dashed border-gray-300"><Camera className="w-4 h-4 text-gray-400" /></div>}
+                                <label className="absolute inset-0 cursor-pointer rounded overflow-hidden">
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageUpload(order.id, file, order.image_url); }} />
+                                  <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/40 transition-colors flex items-center justify-center"><Camera className="w-4 h-4 text-white opacity-0 group-hover/img:opacity-100 transition-opacity" /></div>
+                                </label>
+                                {uploadingImage === order.id && <div className="absolute inset-0 bg-black/50 rounded flex items-center justify-center"><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div></div>}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-500 border-r border-gray-100">{formatDate(order.ordered_date)}</td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100">{(order.quantity ?? 1) > 1 ? <span className="font-semibold text-orange-600">×{order.quantity}</span> : <span className="text-gray-400">1</span>}</td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-500 border-r border-gray-100">{formatDate(order.ship_by)}</td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-2 font-medium" title={order.product_name || ''}>{order.product_name || '-'}</div></td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-1" title={order.tracking_number || ''}>{order.tracking_number || '-'}</div></td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.customer_name || ''}>{order.customer_name || '-'}</div></td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-700 border-r border-gray-100"><div className="line-clamp-2" title={order.address || ''}>{order.address || '-'}</div></td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100">{order.size ? <span className="inline-block bg-blue-100 text-gray-900 px-2 py-0.5 rounded text-xs font-medium">{order.size}</span> : '-'}</td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100">{order.color ? <span className="inline-block bg-gray-200 text-gray-900 px-2 py-0.5 rounded text-xs font-medium">{order.color}</span> : '-'}</td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100">{order.material ? <span className="inline-block bg-green-100 text-gray-900 px-2 py-0.5 rounded text-xs font-medium">{order.material}</span> : '-'}</td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_paid || false} onChange={(e) => handleFieldUpdate(order.id, 'is_paid', e.target.checked)} className={checkboxStyle} /></td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_shipped || false} onChange={(e) => handleFieldUpdate(order.id, 'is_shipped', e.target.checked)} className={checkboxStyle} /></td>
+                            <td className="px-3 py-2 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={order.is_delivered || false} onChange={(e) => handleFieldUpdate(order.id, 'is_delivered', e.target.checked)} className={checkboxStyle} /></td>
+                            {!isAdmin && <td className="px-3 py-2 text-center border-r border-gray-100"><span className="text-sm font-semibold text-blue-600">{formatCurrency(order.total_amount_to_pay)}</span></td>}
+                            {isAdmin && <td className="px-3 py-2 text-center border-r border-gray-100"><span className={`text-xs font-semibold ${order.profit && order.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(order.profit)}</span></td>}
+                            {isAdmin && <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}><button onClick={() => openDeleteConfirm(order)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete order"><Trash2 className="w-3.5 h-3.5" /></button></td>}
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1681,164 +1594,69 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             </button>
           </div>
         ) : (
-          filteredOrders.map((order) => (
-            <div key={order.id} className={`bg-white rounded-xl shadow-sm overflow-hidden ${isNewOrder(order) ? 'ring-2 ring-orange-300' : ''}`}>
-              {/* Order Header - Always Visible */}
-              <div
-                className="p-3 cursor-pointer hover:bg-gray-50 space-y-2"
-                onClick={() => {
-                  setExpandedOrder(expandedOrder === order.id ? null : order.id);
-                  acknowledgeOrder(order);
-                }}
-              >
-                {/* Top row: Checkbox + Image + Color/Size/Material + Actions */}
-                <div className="flex items-center gap-3">
-                  {/* Checkbox */}
-                  {isAdmin && (
-                    <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selectedOrders.has(order.id)}
-                        onChange={() => toggleSelectOrder(order.id)}
-                        className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer"
-                      />
-                    </div>
-                  )}
-
-                  {/* Image */}
-                  <div className="relative flex-shrink-0">
-                    {order.image_url ? (
-                      <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded-lg" />
-                    ) : (
-                      <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center">
-                        <Camera className="w-5 h-5 text-gray-300" />
-                      </div>
-                    )}
-                    {uploadingImage === order.id && (
-                      <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Color, Size, Material */}
-                  <div className="flex-1 min-w-0 grid grid-cols-3 gap-2">
-                    <div>
-                      <span className="block text-[10px] text-gray-400 uppercase">Color</span>
-                      <span className="block text-sm text-gray-900 truncate">{order.color || '-'}</span>
-                    </div>
-                    <div>
-                      <span className="block text-[10px] text-gray-400 uppercase">Size</span>
-                      <span className="block text-sm text-gray-900 truncate">{order.size || '-'}</span>
-                    </div>
-                    <div>
-                      <span className="block text-[10px] text-gray-400 uppercase">Material</span>
-                      <span className="block text-sm text-gray-900 truncate">{order.material || '-'}</span>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedOrder(order)}
-                      className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </button>
-                    {isAdmin && (
-                      <button
-                        onClick={() => openDeleteConfirm(order)}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                    {expandedOrder === order.id ? (
-                      <ChevronUp className="w-4 h-4 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 text-gray-400" />
-                    )}
-                  </div>
-                </div>
-
-                {/* Product Name + Status badges */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-semibold text-gray-900 text-sm truncate">{order.product_name || 'New Order'}</h3>
-                  {order.etsy_order_no && (
-                    <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>
-                  )}
-                  {isNewOrder(order) && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>
-                  )}
-                  {isOutOfStock(order) && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>
-                  )}
-                  {needsTracking(order) && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>
-                  )}
-                  {order.is_paid && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>
-                  )}
-                  {order.is_shipped && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-700">SHIPPED</span>
-                  )}
-                  {order.is_delivered && (
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-100 text-teal-700">DELIVERED</span>
-                  )}
-                </div>
-
-                {/* Date + Customer + Supplier */}
-                <div className="flex items-center flex-wrap gap-2 text-xs text-gray-500">
-                  <span>{formatDate(order.ordered_date) !== '-' ? formatDate(order.ordered_date) : 'No date'}</span>
-                  {order.customer_name && <span>• {order.customer_name}</span>}
-                  {order.order_from && <span>• {order.order_from}</span>}
-                  {(order.quantity ?? 1) > 1 && <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold">×{order.quantity}</span>}
-                  {order.etsy_order_no && (orderGroupMap[order.etsy_order_no]?.length ?? 0) > 1 && (
-                    <div className="relative" data-order-group onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => setOrderGroupPopover(orderGroupPopover === `mob-${order.id}` ? null : `mob-${order.id}`)}
-                        className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-orange-100 text-orange-700 hover:bg-orange-200 transition-colors"
-                      >
-                        {orderGroupMap[order.etsy_order_no].length} items
-                        <ChevronDown className="w-2.5 h-2.5" />
-                      </button>
-                      {orderGroupPopover === `mob-${order.id}` && (
-                        <div className="absolute z-50 bottom-full mb-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg min-w-[180px] max-w-[260px] p-2">
-                          <div className="text-xs font-semibold text-gray-500 mb-1.5 px-1">Order #{order.etsy_order_no}</div>
-                          {orderGroupMap[order.etsy_order_no].map((siblingOrder) => (
-                            <div
-                              key={siblingOrder.id}
-                              className={`flex items-center gap-2 px-2 py-1.5 rounded text-xs ${siblingOrder.id === order.id ? 'bg-orange-50 font-semibold text-orange-800' : 'text-gray-700 hover:bg-gray-50'}`}
-                            >
-                              {siblingOrder.image_url && (
-                                <img src={siblingOrder.image_url} alt="" className="w-6 h-6 rounded object-cover flex-shrink-0" />
-                              )}
-                              <span className="line-clamp-2">{siblingOrder.product_name || '(no name)'}</span>
-                              {(siblingOrder.quantity ?? 1) > 1 && (
-                                <span className="ml-auto flex-shrink-0 font-bold text-orange-600">×{siblingOrder.quantity}</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Prices */}
-                {isAdmin && (order.sold_for || (order.profit !== undefined && order.profit !== null)) && (
+          groupedOrders.map((item) => {
+            // Helper to render a single mobile card
+            const renderMobileCard = (order: Order, isGroupChild = false) => (
+              <div key={order.id} className={`bg-white ${isGroupChild ? '' : 'rounded-xl shadow-sm'} overflow-hidden ${isNewOrder(order) ? 'ring-2 ring-orange-300' : ''}`}>
+                {/* Order Header - Always Visible */}
+                <div
+                  className={`p-3 cursor-pointer hover:bg-gray-50 space-y-2 ${isGroupChild ? 'pl-5 border-t border-gray-100' : ''}`}
+                  onClick={() => {
+                    setExpandedOrder(expandedOrder === order.id ? null : order.id);
+                    acknowledgeOrder(order);
+                  }}
+                >
+                  {/* Top row: Checkbox + Image + Color/Size/Material + Actions */}
                   <div className="flex items-center gap-3">
-                    {order.sold_for && (
-                      <span className="text-xs text-gray-500">Sold: <span className="font-semibold text-gray-900">{formatCurrency(order.sold_for)}</span></span>
+                    {isAdmin && (
+                      <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <input type="checkbox" checked={selectedOrders.has(order.id)} onChange={() => toggleSelectOrder(order.id)} className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer" />
+                      </div>
                     )}
-                    {order.profit !== undefined && order.profit !== null && (
-                      <span className="text-xs text-gray-500">Profit: <span className={`font-semibold ${order.profit >= 0 ? 'text-green-700' : 'text-red-500'}`}>{formatCurrency(order.profit)}</span></span>
-                    )}
+                    <div className="relative flex-shrink-0">
+                      {order.image_url ? <img src={order.image_url} alt="" className="w-24 h-24 object-cover rounded-lg" /> : <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center"><Camera className="w-5 h-5 text-gray-300" /></div>}
+                      {uploadingImage === order.id && <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div></div>}
+                    </div>
+                    <div className="flex-1 min-w-0 grid grid-cols-3 gap-2">
+                      <div><span className="block text-[10px] text-gray-400 uppercase">Color</span><span className="block text-sm text-gray-900 truncate">{order.color || '-'}</span></div>
+                      <div><span className="block text-[10px] text-gray-400 uppercase">Size</span><span className="block text-sm text-gray-900 truncate">{order.size || '-'}</span></div>
+                      <div><span className="block text-[10px] text-gray-400 uppercase">Material</span><span className="block text-sm text-gray-900 truncate">{order.material || '-'}</span></div>
+                    </div>
+                    <div className="flex items-center gap-0.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <button type="button" onClick={() => setSelectedOrder(order)} className="p-1.5 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"><ExternalLink className="w-4 h-4" /></button>
+                      {isAdmin && <button onClick={() => openDeleteConfirm(order)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Delete"><Trash2 className="w-4 h-4" /></button>}
+                      {expandedOrder === order.id ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                    </div>
                   </div>
-                )}
-              </div>
+
+                  {/* Product Name + Status badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-semibold text-gray-900 text-sm truncate">{order.product_name || 'New Order'}</h3>
+                    {!isGroupChild && order.etsy_order_no && <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>}
+                    {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
+                    {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
+                    {needsTracking(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>}
+                    {order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>}
+                    {order.is_shipped && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-700">SHIPPED</span>}
+                    {order.is_delivered && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-100 text-teal-700">DELIVERED</span>}
+                  </div>
+
+                  {/* Date + Customer + Supplier */}
+                  <div className="flex items-center flex-wrap gap-2 text-xs text-gray-500">
+                    <span>{formatDate(order.ordered_date) !== '-' ? formatDate(order.ordered_date) : 'No date'}</span>
+                    {!isGroupChild && order.customer_name && <span>• {order.customer_name}</span>}
+                    {order.order_from && <span>• {order.order_from}</span>}
+                    {(order.quantity ?? 1) > 1 && <span className="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 font-semibold">×{order.quantity}</span>}
+                  </div>
+
+                  {/* Prices */}
+                  {isAdmin && (order.sold_for || (order.profit !== undefined && order.profit !== null)) && (
+                    <div className="flex items-center gap-3">
+                      {order.sold_for && <span className="text-xs text-gray-500">Sold: <span className="font-semibold text-gray-900">{formatCurrency(order.sold_for)}</span></span>}
+                      {order.profit !== undefined && order.profit !== null && <span className="text-xs text-gray-500">Profit: <span className={`font-semibold ${order.profit >= 0 ? 'text-green-700' : 'text-red-500'}`}>{formatCurrency(order.profit)}</span></span>}
+                    </div>
+                  )}
+                </div>
 
               {/* Expanded Content - Mobile */}
               {expandedOrder === order.id && (
@@ -2259,7 +2077,41 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 </div>
               )}
             </div>
-          ))
+            );
+
+            if (item.type === 'single') {
+              return renderMobileCard(item.order);
+            }
+
+            // Multi-item group
+            const { key, orders: groupOrders } = item;
+            const firstOrder = groupOrders[0];
+            const isExpanded = expandedGroups.has(key);
+            return (
+              <div key={`mob-group-${key}`} className="rounded-xl shadow-sm overflow-hidden" style={{ borderLeft: `4px solid ${BRAND_ORANGE}` }}>
+                {/* Group header */}
+                <div
+                  className="bg-orange-50 p-3 cursor-pointer hover:bg-orange-100/70 transition-colors flex items-center gap-3"
+                  onClick={() => toggleGroup(key)}
+                >
+                  {isExpanded ? <ChevronUp className="w-5 h-5 flex-shrink-0" style={{ color: BRAND_ORANGE }} /> : <ChevronDown className="w-5 h-5 flex-shrink-0" style={{ color: BRAND_ORANGE }} />}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-gray-900">{firstOrder.customer_name || '-'}</span>
+                      <span className="px-2 py-0.5 rounded-full text-xs font-bold text-white" style={{ backgroundColor: BRAND_ORANGE }}>{groupOrders.length} items</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                      <span>#{key}</span>
+                      <span>{formatDate(firstOrder.ordered_date)}</span>
+                      {firstOrder.ship_by && <span>Ship by {formatDate(firstOrder.ship_by)}</span>}
+                    </div>
+                  </div>
+                </div>
+                {/* Group children */}
+                {isExpanded && groupOrders.map((order) => renderMobileCard(order, true))}
+              </div>
+            );
+          })
         )}
       </div>
 
@@ -2669,6 +2521,49 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   rows={8}
                 />
               </div>
+
+              {/* VAT Section */}
+              {isAdmin && (
+                <div className={`rounded-xl p-4 border-2 ${selectedOrder.has_vat ? 'bg-blue-50 border-blue-300' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`font-semibold text-sm ${selectedOrder.has_vat ? 'text-blue-700' : 'text-gray-500'}`}>VAT</span>
+                    </div>
+                    <button
+                      onClick={() => handleFieldUpdate(selectedOrder.id, 'has_vat', !selectedOrder.has_vat)}
+                      className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+                        selectedOrder.has_vat
+                          ? 'bg-blue-500 text-white hover:bg-blue-600'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                    >
+                      {selectedOrder.has_vat ? 'VAT Required' : 'No VAT'}
+                    </button>
+                  </div>
+                  {selectedOrder.has_vat && (
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">VAT Number</label>
+                        <EditableField
+                          type="text"
+                          value={selectedOrder.vat_number || ''}
+                          onChange={(v) => handleFieldUpdate(selectedOrder.id, 'vat_number', v)}
+                          placeholder="e.g. 370 6004 28"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Order Value (local currency)</label>
+                        <EditableField
+                          type="text"
+                          value={selectedOrder.vat_amount || ''}
+                          onChange={(v) => handleFieldUpdate(selectedOrder.id, 'vat_amount', v)}
+                          placeholder="e.g. £29.85"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Notes - Resizable */}
               <div>

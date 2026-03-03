@@ -111,6 +111,11 @@ export interface Order {
   the_solution?: string;
   internal_notes?: string;
 
+  // VAT
+  has_vat?: boolean;
+  vat_number?: string;
+  vat_amount?: string;
+
   // Product Link
   product_id?: string;
   variation_id?: string;

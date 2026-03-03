@@ -19,8 +19,16 @@ Next.js 16 + React 19 + Supabase (PostgreSQL) + Tailwind CSS 4 + TypeScript.
 
 ### Address
 - Address is stored as a **single `address` textarea field** — no separate city/state/zip columns.
-- The user types/pastes the full address block manually.
-- No DB migration to split address into separate fields.
+- Format must follow this labeled structure:
+  ```
+  Name: {full name}
+  Address: {street address, apt}
+  City: {city}
+  Province/State: {state/province}
+  Country: {country}
+  Zip code: {zip/postal code}
+  ```
+- When adding orders via script, always parse the Etsy address into this format.
 
 ### WhatsApp Sending
 - No WhatsApp API — uses **clipboard copy approach**:
