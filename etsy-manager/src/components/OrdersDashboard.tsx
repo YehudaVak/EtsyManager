@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supabase';
+import { parseEtsyOrders, ParsedEtsyOrder } from '@/lib/etsy-parser';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
 import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy } from 'lucide-react';
@@ -53,6 +54,14 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
   // Expanded order groups (etsy_order_no keys)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  // Import from Etsy state
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importRawText, setImportRawText] = useState('');
+  const [importParsed, setImportParsed] = useState<ParsedEtsyOrder[]>([]);
+  const [importPreview, setImportPreview] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResults, setImportResults] = useState<{ added: number; updated: number; skipped: number } | null>(null);
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
@@ -384,19 +393,18 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // WhatsApp copy helpers
   const buildOrderMessage = (order: Order): string => {
     const lines: string[] = [];
+    // Address
     if (order.address) lines.push(order.address);
-    // Extract variation name from "Product – Variation" format
-    const variationName = order.product_name?.includes(' – ')
-      ? order.product_name.split(' – ').slice(1).join(' – ')
-      : null;
-    if (variationName) lines.push(variationName);
+    // Blank line + Quantity
+    lines.push('');
     lines.push(`Quantity: ${order.quantity ?? 1}`);
-    // VAT details
+    // VAT - single line
     if (order.has_vat && (order.vat_number || order.vat_amount)) {
       lines.push('');
-      lines.push('VAT Details:');
-      if (order.vat_number) lines.push(`VAT Number: ${order.vat_number}`);
-      if (order.vat_amount) lines.push(`Value: ${order.vat_amount}`);
+      const vatParts: string[] = [];
+      if (order.vat_number) vatParts.push(order.vat_number);
+      if (order.vat_amount) vatParts.push(`value ${order.vat_amount}`);
+      lines.push(`VAT Collected - ${vatParts.join(', ')}`);
     }
     return lines.join('\n');
   };
@@ -533,6 +541,128 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     } catch (error) {
       console.error('Error adding order:', error);
     }
+  };
+
+  // Import from Etsy - parse raw text
+  const handleImportParse = () => {
+    const parsed = parseEtsyOrders(importRawText);
+    setImportParsed(parsed);
+    setImportPreview(true);
+    setImportResults(null);
+  };
+
+  // Import from Etsy - upsert orders
+  const handleImportConfirm = async () => {
+    if (!selectedStore || importParsed.length === 0) return;
+    setImportLoading(true);
+    setImportResults(null);
+
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    try {
+      for (const parsed of importParsed) {
+        // Check if order already exists by etsy_order_no + product_name
+        const { data: existing } = await supabase
+          .from('orders')
+          .select('id, tracking_number, address, has_vat, vat_number, vat_amount, quantity, ship_by')
+          .eq('store_id', selectedStore.id)
+          .eq('etsy_order_no', parsed.etsy_order_no)
+          .eq('product_name', parsed.product_name);
+
+        if (existing && existing.length > 0) {
+          // Order exists - check if there's anything to update
+          const existingOrder = existing[0];
+          const updates: Record<string, any> = {};
+
+          // Update tracking if it was added
+          if (parsed.tracking_number && !existingOrder.tracking_number) {
+            updates.tracking_number = parsed.tracking_number;
+            updates.tracking_added = true;
+          }
+          // Update address if empty
+          if (parsed.address && !existingOrder.address) {
+            updates.address = parsed.address;
+          }
+          // Update VAT if new
+          if (parsed.has_vat && !existingOrder.has_vat) {
+            updates.has_vat = true;
+            if (parsed.vat_number) updates.vat_number = parsed.vat_number;
+            if (parsed.vat_amount) updates.vat_amount = parsed.vat_amount;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            const { error } = await supabase
+              .from('orders')
+              .update(updates)
+              .eq('id', existingOrder.id);
+            if (!error) {
+              updated++;
+              // Update local state
+              setOrders(prev => prev.map(o =>
+                o.id === existingOrder.id ? { ...o, ...updates } : o
+              ));
+            }
+          } else {
+            skipped++;
+          }
+        } else {
+          // New order - insert
+          const newOrder: Record<string, any> = {
+            store_id: selectedStore.id,
+            etsy_order_no: parsed.etsy_order_no,
+            customer_name: parsed.customer_name,
+            address: parsed.address,
+            product_name: parsed.product_name,
+            quantity: parsed.quantity,
+            sold_for: parsed.sold_for,
+            ordered_date: parsed.ordered_date,
+            ship_by: parsed.ship_by,
+            fees_percent: 12.5,
+            color: parsed.color || undefined,
+            size: parsed.size || undefined,
+          };
+
+          if (parsed.tracking_number) {
+            newOrder.tracking_number = parsed.tracking_number;
+            newOrder.tracking_added = true;
+          }
+          if (parsed.has_vat) {
+            newOrder.has_vat = true;
+            if (parsed.vat_number) newOrder.vat_number = parsed.vat_number;
+            if (parsed.vat_amount) newOrder.vat_amount = parsed.vat_amount;
+          }
+
+          const { data, error } = await supabase
+            .from('orders')
+            .insert(newOrder)
+            .select()
+            .single();
+
+          if (!error && data) {
+            added++;
+            setOrders(prev => [data, ...prev]);
+          }
+        }
+      }
+
+      setImportResults({ added, updated, skipped });
+    } catch (error) {
+      console.error('Error importing orders:', error);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  // Reset import modal
+  const handleImportClose = () => {
+    setImportModalOpen(false);
+    setImportRawText('');
+    setImportParsed([]);
+    setImportPreview(false);
+    setImportResults(null);
+    setImportLoading(false);
   };
 
   // Acknowledge order when supplier views it (for non-admin)
@@ -897,6 +1027,15 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               >
                 <RefreshCw className="w-5 h-5" />
               </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setImportModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity bg-green-600"
+                >
+                  <Upload className="w-5 h-5" />
+                  <span className="hidden sm:inline">Import Etsy</span>
+                </button>
+              )}
               <button
                 onClick={handleAddOrder}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity"
@@ -2853,6 +2992,134 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
           </button>
         </div>
       )}
+      {/* Import from Etsy Modal */}
+      {importModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold text-gray-900">Import from Etsy</h3>
+              <button onClick={handleImportClose} className="p-1 text-gray-400 hover:text-gray-600 rounded">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {!importPreview ? (
+                <div>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Paste raw order text from Etsy orders page. Existing orders will be updated (e.g. tracking numbers), new orders will be added.
+                  </p>
+                  <textarea
+                    value={importRawText}
+                    onChange={(e) => setImportRawText(e.target.value)}
+                    placeholder="Paste Etsy orders here..."
+                    className="w-full h-64 p-3 border rounded-lg text-sm font-mono resize-y focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  />
+                </div>
+              ) : (
+                <div>
+                  {importResults ? (
+                    <div className="mb-4 p-4 rounded-lg bg-green-50 border border-green-200">
+                      <p className="font-semibold text-green-800">Import Complete</p>
+                      <p className="text-sm text-green-700 mt-1">
+                        {importResults.added > 0 && <span className="mr-3">Added: {importResults.added}</span>}
+                        {importResults.updated > 0 && <span className="mr-3">Updated: {importResults.updated}</span>}
+                        {importResults.skipped > 0 && <span>Unchanged: {importResults.skipped}</span>}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-600 mb-3">
+                      Found <strong>{importParsed.length}</strong> order items. Review before importing:
+                    </p>
+                  )}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-gray-100">
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">#</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Order No</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Customer</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Product</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Qty</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Price</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Date</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Tracking</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">VAT</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importParsed.map((order, idx) => (
+                          <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="px-2 py-1.5 border text-gray-500">{idx + 1}</td>
+                            <td className="px-2 py-1.5 border font-mono text-xs">{order.etsy_order_no}</td>
+                            <td className="px-2 py-1.5 border">{order.customer_name}</td>
+                            <td className="px-2 py-1.5 border max-w-[200px] truncate" title={order.product_name}>{order.product_name}</td>
+                            <td className="px-2 py-1.5 border text-center">{order.quantity}</td>
+                            <td className="px-2 py-1.5 border">${order.sold_for}</td>
+                            <td className="px-2 py-1.5 border">{order.ordered_date}</td>
+                            <td className="px-2 py-1.5 border font-mono text-xs">{order.tracking_number || '-'}</td>
+                            <td className="px-2 py-1.5 border text-center">{order.has_vat ? 'Yes' : '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-between p-4 border-t bg-gray-50 rounded-b-xl">
+              {!importPreview ? (
+                <>
+                  <span className="text-sm text-gray-500">
+                    {importRawText.trim() ? `${(importRawText.match(/Select this order from/g) || []).length} orders detected` : ''}
+                  </span>
+                  <div className="flex gap-2">
+                    <button onClick={handleImportClose} className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium">
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleImportParse}
+                      disabled={!importRawText.trim()}
+                      className="px-4 py-2 text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg font-medium"
+                    >
+                      Parse Orders
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setImportPreview(false); setImportResults(null); }}
+                    className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium"
+                  >
+                    Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={handleImportClose} className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium">
+                      {importResults ? 'Done' : 'Cancel'}
+                    </button>
+                    {!importResults && (
+                      <button
+                        onClick={handleImportConfirm}
+                        disabled={importLoading}
+                        className="px-4 py-2 text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                      >
+                        {importLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                        {importLoading ? 'Importing...' : `Import ${importParsed.length} Orders`}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Copy Toast */}
       {copyToast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 bg-gray-900 text-white rounded-lg shadow-lg text-sm font-medium animate-fade-in">

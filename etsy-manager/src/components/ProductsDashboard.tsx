@@ -81,17 +81,30 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   // Column widths for resizable columns
   const [columnWidths, setColumnWidths] = useState<{ [key: string]: number }>({
-    rowNum: 50,
+    rowNum: 40,
     image: 110,
-    name: 200,
-    supplier: 120,
+    status: 100,
     subcategory: 100,
-    status: 120,
-    etsyPrice: 90,
-    salePercent: 80,
-    priceUS: 80,
+    storeLink: 80,
+    storeName: 100,
+    monthlySales: 90,
+    storeAge: 80,
+    competitors: 100,
+    name: 200,
+    etsyLink: 70,
+    aliLink: 70,
+    supplierLink: 70,
+    compPrice: 70,
+    compShip: 80,
+    compTotal: 80,
+    etsyPrice: 80,
+    afterSale: 80,
+    supplierPrice: 80,
     profit: 80,
-    outOfStock: 70,
+    profitPercent: 70,
+    supplier: 100,
+    remarks: 120,
+    outOfStock: 60,
     actions: 80,
   });
 
@@ -1240,29 +1253,10 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     Image
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'image')} />
                   </th>
-                  {/* Product Name */}
-                  <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
-                    style={{ width: columnWidths.name }}
-                    onClick={() => handleSort('name')}
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      Product Name
-                      {renderSortIcon('name')}
-                    </div>
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'name'); }} />
-                  </th>
-                  {/* Supplier */}
-                  <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
-                    style={{ width: columnWidths.supplier }}
-                    onClick={() => handleSort('supplier_name')}
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      Supplier
-                      {renderSortIcon('supplier_name')}
-                    </div>
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'supplier'); }} />
+                  {/* Status */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.status }}>
+                    Status
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'status')} />
                   </th>
                   {/* Subcategory */}
                   <th
@@ -1276,10 +1270,72 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     </div>
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'subcategory'); }} />
                   </th>
-                  {/* Status */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.status }}>
-                    Status
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'status')} />
+                  {/* Store Link */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeLink }}>
+                    Store Link
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeLink')} />
+                  </th>
+                  {/* Store Name */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeName }}>
+                    Store Name
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeName')} />
+                  </th>
+                  {/* Monthly Sales */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.monthlySales }}>
+                    Monthly Sales
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'monthlySales')} />
+                  </th>
+                  {/* Store Age */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeAge }}>
+                    Store Age
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeAge')} />
+                  </th>
+                  {/* Competitors */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.competitors }}>
+                    Competitors
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'competitors')} />
+                  </th>
+                  {/* Product Name */}
+                  <th
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    style={{ width: columnWidths.name }}
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Product Name
+                      {renderSortIcon('name')}
+                    </div>
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'name'); }} />
+                  </th>
+                  {/* Etsy Link */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.etsyLink }}>
+                    Etsy
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'etsyLink')} />
+                  </th>
+                  {/* Ali Link */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.aliLink }}>
+                    Ali
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'aliLink')} />
+                  </th>
+                  {/* 1688 Link */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.supplierLink }}>
+                    1688
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'supplierLink')} />
+                  </th>
+                  {/* Competitor Price */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.compPrice }}>
+                    Comp. $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'compPrice')} />
+                  </th>
+                  {/* Competitor Shipment */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.compShip }}>
+                    Comp. Ship $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'compShip')} />
+                  </th>
+                  {/* Total Competitor */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.compTotal }}>
+                    Total Comp. $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'compTotal')} />
                   </th>
                   {/* Etsy Price */}
                   <th
@@ -1293,20 +1349,42 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     </div>
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'etsyPrice'); }} />
                   </th>
-                  {/* Sale % */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.salePercent }}>
-                    Sale %
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'salePercent')} />
+                  {/* After Sale Price */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.afterSale }}>
+                    After 35% $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'afterSale')} />
                   </th>
-                  {/* US Price */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.priceUS }}>
-                    US $
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'priceUS')} />
+                  {/* Supplier Price */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.supplierPrice }}>
+                    Supplier $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'supplierPrice')} />
                   </th>
                   {/* Profit */}
                   <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profit }}>
-                    Profit
+                    Profit $
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profit')} />
+                  </th>
+                  {/* Profit % */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profitPercent }}>
+                    Profit %
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profitPercent')} />
+                  </th>
+                  {/* Supplier */}
+                  <th
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    style={{ width: columnWidths.supplier }}
+                    onClick={() => handleSort('supplier_name')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Supplier
+                      {renderSortIcon('supplier_name')}
+                    </div>
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'supplier'); }} />
+                  </th>
+                  {/* Remarks */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.remarks }}>
+                    Remarks
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'remarks')} />
                   </th>
                   {/* Out of Stock */}
                   <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.outOfStock }}>
@@ -1324,7 +1402,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               <tbody>
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={14} className="px-6 py-12 text-center">
+                    <td colSpan={27} className="px-6 py-12 text-center">
                       <Package className="w-12 h-12 mx-auto text-gray-300 mb-3" />
                       <p className="text-gray-500">No products found</p>
                     </td>
@@ -1378,36 +1456,97 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                           )}
                         </div>
                       </td>
-                      {/* Product Name */}
-                      <td className="px-3 text-center border-r border-gray-100">
-                        <div className="line-clamp-2 text-base font-medium text-gray-900">{product.name}</div>
-                      </td>
-                      {/* Supplier */}
-                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.supplier_name || '-'}
-                      </td>
-                      {/* Subcategory */}
-                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.subcategory || '-'}
-                      </td>
                       {/* Status */}
                       <td className="px-3 text-center border-r border-gray-100">
                         {getStatusBadge(product)}
                       </td>
+                      {/* Subcategory */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.subcategory || '-'}
+                      </td>
+                      {/* Store Link */}
+                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                        {product.store_link ? (
+                          <a href={product.store_link} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                            <ExternalLink className="w-4 h-4 mx-auto" />
+                          </a>
+                        ) : <span className="text-gray-300">-</span>}
+                      </td>
+                      {/* Store Name */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.store_name || '-'}
+                      </td>
+                      {/* Monthly Sales */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.weekly_monthly_sales || '-'}
+                      </td>
+                      {/* Store Age */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.store_age || '-'}
+                      </td>
+                      {/* Competitors */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.competitors || '-'}
+                      </td>
+                      {/* Product Name */}
+                      <td className="px-3 text-center border-r border-gray-100">
+                        <div className="line-clamp-2 text-base font-medium text-gray-900">{product.name}</div>
+                      </td>
+                      {/* Etsy Link */}
+                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                        {product.product_link ? (
+                          <a href={product.product_link} target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:text-orange-700">
+                            <ExternalLink className="w-4 h-4 mx-auto" />
+                          </a>
+                        ) : <span className="text-gray-300">-</span>}
+                      </td>
+                      {/* Ali Link */}
+                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                        {product.ali_link ? (
+                          <a href={product.ali_link} target="_blank" rel="noopener noreferrer" className="text-red-500 hover:text-red-700">
+                            <ExternalLink className="w-4 h-4 mx-auto" />
+                          </a>
+                        ) : <span className="text-gray-300">-</span>}
+                      </td>
+                      {/* 1688 Link */}
+                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                        {product.supplier_link ? (
+                          <a href={product.supplier_link} target="_blank" rel="noopener noreferrer" className="text-yellow-600 hover:text-yellow-800">
+                            <ExternalLink className="w-4 h-4 mx-auto" />
+                          </a>
+                        ) : <span className="text-gray-300">-</span>}
+                      </td>
+                      {/* Competitor Price */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {formatCurrency(product.competitor_price)}
+                      </td>
+                      {/* Competitor Shipment */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {formatCurrency(product.competitor_shipment)}
+                      </td>
+                      {/* Total Competitor */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {product.competitor_price != null || product.competitor_shipment != null
+                          ? formatCurrency((product.competitor_price || 0) + (product.competitor_shipment || 0))
+                          : '-'}
+                      </td>
                       {/* Etsy Price */}
-                      <td className="px-3 text-base text-gray-900 text-center border-r border-gray-100">
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
                         {formatCurrency(product.etsy_full_price)}
                       </td>
-                      {/* Sale % */}
-                      <td className="px-3 text-base text-gray-600 text-center border-r border-gray-100">
-                        {product.sale_percent != null ? `${product.sale_percent}%` : '-'}
+                      {/* After 35% */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {(() => {
+                          const afterSale = getAfterSalePrice(product);
+                          return afterSale !== null ? formatCurrency(afterSale) : '-';
+                        })()}
                       </td>
-                      {/* US Price */}
-                      <td className="px-3 text-base text-gray-900 text-center border-r border-gray-100">
+                      {/* Supplier Price */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
                         {getSupplierPrice(product)}
                       </td>
-                      {/* Profit */}
-                      <td className="px-3 text-base text-center border-r border-gray-100">
+                      {/* Profit $ */}
+                      <td className="px-3 text-sm text-center border-r border-gray-100">
                         {(() => {
                           const profit = getProfit(product);
                           if (profit === '-') return <span className="text-gray-400">-</span>;
@@ -1417,6 +1556,28 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                             </span>
                           );
                         })()}
+                      </td>
+                      {/* Profit % */}
+                      <td className="px-3 text-sm text-center border-r border-gray-100">
+                        {(() => {
+                          const profit = getProfit(product);
+                          const afterSale = getAfterSalePrice(product);
+                          if (profit === '-' || afterSale === null || afterSale === 0) return <span className="text-gray-400">-</span>;
+                          const pct = ((profit as number) / afterSale) * 100;
+                          return (
+                            <span className={`font-medium ${pct >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {pct.toFixed(1)}%
+                            </span>
+                          );
+                        })()}
+                      </td>
+                      {/* Supplier */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.supplier_name || '-'}
+                      </td>
+                      {/* Remarks */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100">
+                        <div className="line-clamp-2">{product.remarks || '-'}</div>
                       </td>
                       {/* Out of Stock */}
                       <td className="px-3 text-center border-r border-gray-100">
@@ -1437,17 +1598,6 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
-                          {product.product_link && (
-                            <a
-                              href={product.product_link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-1 text-gray-400 hover:text-orange-500 hover:bg-orange-50 rounded transition-colors"
-                              title="Etsy"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          )}
                           <button
                             type="button"
                             onClick={() => handleDuplicateProduct(product)}
@@ -2182,7 +2332,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">Sales</label>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Monthly Sales</label>
                     <EditableField
                       value={selectedProduct.weekly_monthly_sales || ''}
                       onChange={(v) => handleUpdateProduct(selectedProduct.id, { weekly_monthly_sales: String(v) })}
