@@ -180,10 +180,12 @@ export interface Product {
   // Supplier Info
   supplier_name?: string;
   supplier_price?: number;
+  supplier_pricing_image?: string;
 
   // Competitor / Store Research
   store_link?: string;
   store_name?: string;
+  competitor_product_link?: string;
   weekly_monthly_sales?: string;
   store_age?: string;
   competitors?: string;
@@ -196,6 +198,7 @@ export interface Product {
   product_status?: string; // 'active' | 'to_quote' | 'quotation_received'
   is_active: boolean;
   is_out_of_stock?: boolean;
+  is_starred?: boolean;
 
   // Notes
   notes?: string;
@@ -225,6 +228,7 @@ export interface ProductVariation {
   size?: string;
   material?: string;
   price?: number;
+  supplier_price?: number;
   shipping_time?: string;
   sort_order?: number;
   created_at?: string;

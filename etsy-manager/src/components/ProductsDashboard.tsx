@@ -24,6 +24,7 @@ import {
   ArrowDown,
   Copy,
   GripVertical,
+  Star,
 } from 'lucide-react';
 
 const BRAND_ORANGE = '#d96f36';
@@ -39,12 +40,20 @@ const PRODUCT_STATUSES = [
 
 // Common countries for pricing
 const COUNTRIES = ['US', 'UK/GB', 'DE', 'CA', 'AU', 'Other'];
+const COUNTRIES_LAST = ['AU', 'Other'];
 const COUNTRY_LABELS: Record<string, string> = {
   'US': 'United States (US)',
   'UK/GB': 'United Kingdom (UK)',
   'DE': 'Germany (DE)',
   'CA': 'Canada (CA)',
   'AU': 'Australia (AU)',
+  'CH': 'Switzerland (CH)',
+  'SE': 'Sweden (SE)',
+  'BE': 'Belgium (BE)',
+  'NL': 'Netherlands (NL)',
+  'FR': 'France (FR)',
+  'IT': 'Italy (IT)',
+  'ES': 'Spain (ES)',
   'Other': 'Other',
 };
 
@@ -70,11 +79,13 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   // Status filter tabs
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'need_work' | 'to_quote' | 'quotation_received' | 'removed' | 'out_of_stock'>('all');
+  const [starredOnly, setStarredOnly] = useState(false);
 
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [extractingPrices, setExtractingPrices] = useState(false);
 
   // Sort
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'desc' });
@@ -412,6 +423,70 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       fetchProducts(true);
     } catch (error) {
       console.error('Error updating pricing:', error);
+    }
+  };
+
+  const handleExtractPrices = async (product: ProductWithPricing) => {
+    if (!product.supplier_pricing_image) return;
+    setExtractingPrices(true);
+    try {
+      // Fetch image in browser and convert to base64
+      const imgRes = await fetch(product.supplier_pricing_image);
+      const blob = await imgRes.blob();
+      const mediaType = blob.type || 'image/png';
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const dataUrl = reader.result as string;
+          resolve(dataUrl.split(',')[1]);
+        };
+        reader.readAsDataURL(blob);
+      });
+
+      // Send base64 to server-side API route (uses IPv4 to avoid connection issues)
+      const apiRes = await fetch('/api/extract-prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: base64, mediaType }),
+      });
+
+      if (!apiRes.ok) {
+        const errData = await apiRes.json().catch(() => ({}));
+        console.error('Extract prices API error:', errData);
+        setCopyToast(errData.error || 'Failed to extract prices');
+        setTimeout(() => setCopyToast(null), 5000);
+        return;
+      }
+
+      const data = await apiRes.json();
+
+      // Update each country pricing
+      for (const item of data.prices) {
+        await handleUpdatePricing(product.id, item.country, {
+          price: item.price,
+          shipping_time: item.shipping_time,
+        });
+      }
+
+      // Auto-update main supplier_price and selected supplier from US price
+      const usPrice = data.prices.find((p: any) => p.country === 'US');
+      if (usPrice) {
+        await handleUpdateProduct(product.id, { supplier_price: usPrice.price });
+        // Also update the selected supplier's price
+        const selectedSupplier = product.suppliers?.find((s) => s.is_selected);
+        if (selectedSupplier) {
+          await handleUpdateSupplier(selectedSupplier.id, product.id, { price: usPrice.price });
+        }
+      }
+
+      setCopyToast(`Updated ${data.prices.length} country prices`);
+      setTimeout(() => setCopyToast(null), 3000);
+    } catch (error) {
+      console.error('Extract prices error:', error);
+      setCopyToast('Failed to extract prices');
+      setTimeout(() => setCopyToast(null), 3000);
+    } finally {
+      setExtractingPrices(false);
     }
   };
 
@@ -955,6 +1030,8 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   const filteredProducts = products
     .filter((product) => {
+      // Starred filter
+      if (starredOnly && !product.is_starred) return false;
       // Status filter
       if (statusFilter === 'active' && product.product_status !== 'active') return false;
       if (statusFilter === 'need_work' && product.product_status !== 'need_work') return false;
@@ -973,6 +1050,9 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       );
     })
     .sort((a, b) => {
+      // Starred products first
+      if (a.is_starred && !b.is_starred) return -1;
+      if (!a.is_starred && b.is_starred) return 1;
       if (!sortConfig.key) return 0;
       const aVal = (a as any)[sortConfig.key];
       const bVal = (b as any)[sortConfig.key];
@@ -1091,6 +1171,18 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
       {/* ── Status Filter Tabs ─────────────────────────────────── */}
       <div className="px-4 pt-4">
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setStarredOnly(!starredOnly)}
+            className={`px-3 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-1 ${
+              starredOnly
+                ? 'bg-yellow-100 text-yellow-700 border border-yellow-300'
+                : 'bg-white text-gray-400 hover:bg-yellow-50 border border-gray-200'
+            }`}
+            title="Show starred only"
+          >
+            <Star className={`w-4 h-4 ${starredOnly ? 'fill-yellow-400 text-yellow-400' : ''}`} />
+            <span className="px-1.5 py-0.5 rounded-full text-xs bg-yellow-100 text-yellow-700">{products.filter(p => p.is_starred).length}</span>
+          </button>
           <button
             onClick={() => setStatusFilter('all')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
@@ -1258,6 +1350,50 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     Status
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'status')} />
                   </th>
+                  {/* Product Name */}
+                  <th
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    style={{ width: columnWidths.name }}
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Product Name
+                      {renderSortIcon('name')}
+                    </div>
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'name'); }} />
+                  </th>
+                  {/* Supplier Price */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.supplierPrice }}>
+                    Supplier $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'supplierPrice')} />
+                  </th>
+                  {/* Etsy Price */}
+                  <th
+                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
+                    style={{ width: columnWidths.etsyPrice }}
+                    onClick={() => handleSort('etsy_full_price')}
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      Etsy $
+                      {renderSortIcon('etsy_full_price')}
+                    </div>
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'etsyPrice'); }} />
+                  </th>
+                  {/* After Sale Price */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.afterSale }}>
+                    After Sale $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'afterSale')} />
+                  </th>
+                  {/* Profit */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profit }}>
+                    Profit $
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profit')} />
+                  </th>
+                  {/* Profit % */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profitPercent }}>
+                    Profit %
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profitPercent')} />
+                  </th>
                   {/* Subcategory */}
                   <th
                     className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
@@ -1270,42 +1406,17 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     </div>
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'subcategory'); }} />
                   </th>
-                  {/* Store Link */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeLink }}>
-                    Store Link
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeLink')} />
-                  </th>
-                  {/* Store Name */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeName }}>
-                    Store Name
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeName')} />
-                  </th>
-                  {/* Monthly Sales */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.monthlySales }}>
-                    Monthly Sales
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'monthlySales')} />
-                  </th>
-                  {/* Store Age */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeAge }}>
-                    Store Age
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeAge')} />
-                  </th>
-                  {/* Competitors */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.competitors }}>
-                    Competitors
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'competitors')} />
-                  </th>
-                  {/* Product Name */}
+                  {/* Supplier */}
                   <th
                     className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
-                    style={{ width: columnWidths.name }}
-                    onClick={() => handleSort('name')}
+                    style={{ width: columnWidths.supplier }}
+                    onClick={() => handleSort('supplier_name')}
                   >
                     <div className="flex items-center justify-center gap-1">
-                      Product Name
-                      {renderSortIcon('name')}
+                      Supplier
+                      {renderSortIcon('supplier_name')}
                     </div>
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'name'); }} />
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'supplier'); }} />
                   </th>
                   {/* Etsy Link */}
                   <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.etsyLink }}>
@@ -1337,49 +1448,30 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                     Total Comp. $
                     <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'compTotal')} />
                   </th>
-                  {/* Etsy Price */}
-                  <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
-                    style={{ width: columnWidths.etsyPrice }}
-                    onClick={() => handleSort('etsy_full_price')}
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      Etsy $
-                      {renderSortIcon('etsy_full_price')}
-                    </div>
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'etsyPrice'); }} />
+                  {/* Store Link */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeLink }}>
+                    Store Link
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeLink')} />
                   </th>
-                  {/* After Sale Price */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.afterSale }}>
-                    After 35% $
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'afterSale')} />
+                  {/* Store Name */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeName }}>
+                    Store Name
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeName')} />
                   </th>
-                  {/* Supplier Price */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.supplierPrice }}>
-                    Supplier $
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'supplierPrice')} />
+                  {/* Monthly Sales */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.monthlySales }}>
+                    Monthly Sales
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'monthlySales')} />
                   </th>
-                  {/* Profit */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profit }}>
-                    Profit $
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profit')} />
+                  {/* Store Age */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.storeAge }}>
+                    Store Age
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'storeAge')} />
                   </th>
-                  {/* Profit % */}
-                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.profitPercent }}>
-                    Profit %
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'profitPercent')} />
-                  </th>
-                  {/* Supplier */}
-                  <th
-                    className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a] cursor-pointer hover:bg-[#c45f2a] transition-colors"
-                    style={{ width: columnWidths.supplier }}
-                    onClick={() => handleSort('supplier_name')}
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      Supplier
-                      {renderSortIcon('supplier_name')}
-                    </div>
-                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => { e.stopPropagation(); handleResizeStart(e, 'supplier'); }} />
+                  {/* Competitors */}
+                  <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.competitors }}>
+                    Competitors
+                    <div className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-white/30" onMouseDown={(e) => handleResizeStart(e, 'competitors')} />
                   </th>
                   {/* Remarks */}
                   <th className="relative px-3 py-3 text-center text-sm font-semibold text-white border-r border-[#c45f2a]" style={{ width: columnWidths.remarks }}>
@@ -1460,37 +1552,66 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       <td className="px-3 text-center border-r border-gray-100">
                         {getStatusBadge(product)}
                       </td>
+                      {/* Product Name */}
+                      <td className="px-3 text-center border-r border-gray-100">
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUpdateProduct(product.id, { is_starred: !product.is_starred }); }}
+                            className="flex-shrink-0 hover:scale-110 transition-transform"
+                          >
+                            <Star className={`w-5 h-5 ${product.is_starred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`} />
+                          </button>
+                          <div className="line-clamp-2 text-base font-medium text-gray-900">{product.name}</div>
+                        </div>
+                      </td>
+                      {/* Supplier Price */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {getSupplierPrice(product)}
+                      </td>
+                      {/* Etsy Price */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {formatCurrency(product.etsy_full_price)}
+                      </td>
+                      {/* After 35% */}
+                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
+                        {(() => {
+                          const afterSale = getAfterSalePrice(product);
+                          return afterSale !== null ? formatCurrency(afterSale) : '-';
+                        })()}
+                      </td>
+                      {/* Profit $ */}
+                      <td className="px-3 text-sm text-center border-r border-gray-100">
+                        {(() => {
+                          const profit = getProfit(product);
+                          if (profit === '-') return <span className="text-gray-400">-</span>;
+                          return (
+                            <span className={`font-medium ${(profit as number) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              ${(profit as number).toFixed(2)}
+                            </span>
+                          );
+                        })()}
+                      </td>
+                      {/* Profit % */}
+                      <td className="px-3 text-sm text-center border-r border-gray-100">
+                        {(() => {
+                          const profit = getProfit(product);
+                          const afterSale = getAfterSalePrice(product);
+                          if (profit === '-' || afterSale === null || afterSale === 0) return <span className="text-gray-400">-</span>;
+                          const pct = ((profit as number) / afterSale) * 100;
+                          return (
+                            <span className={`font-medium ${pct >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {pct.toFixed(1)}%
+                            </span>
+                          );
+                        })()}
+                      </td>
                       {/* Subcategory */}
                       <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
                         {product.subcategory || '-'}
                       </td>
-                      {/* Store Link */}
-                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
-                        {product.store_link ? (
-                          <a href={product.store_link} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
-                            <ExternalLink className="w-4 h-4 mx-auto" />
-                          </a>
-                        ) : <span className="text-gray-300">-</span>}
-                      </td>
-                      {/* Store Name */}
+                      {/* Supplier */}
                       <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.store_name || '-'}
-                      </td>
-                      {/* Monthly Sales */}
-                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.weekly_monthly_sales || '-'}
-                      </td>
-                      {/* Store Age */}
-                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.store_age || '-'}
-                      </td>
-                      {/* Competitors */}
-                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.competitors || '-'}
-                      </td>
-                      {/* Product Name */}
-                      <td className="px-3 text-center border-r border-gray-100">
-                        <div className="line-clamp-2 text-base font-medium text-gray-900">{product.name}</div>
+                        {product.supplier_name || '-'}
                       </td>
                       {/* Etsy Link */}
                       <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
@@ -1530,50 +1651,29 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                           ? formatCurrency((product.competitor_price || 0) + (product.competitor_shipment || 0))
                           : '-'}
                       </td>
-                      {/* Etsy Price */}
-                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
-                        {formatCurrency(product.etsy_full_price)}
+                      {/* Store Link */}
+                      <td className="px-3 text-center border-r border-gray-100" onClick={(e) => e.stopPropagation()}>
+                        {product.store_link ? (
+                          <a href={product.store_link} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                            <ExternalLink className="w-4 h-4 mx-auto" />
+                          </a>
+                        ) : <span className="text-gray-300">-</span>}
                       </td>
-                      {/* After 35% */}
-                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
-                        {(() => {
-                          const afterSale = getAfterSalePrice(product);
-                          return afterSale !== null ? formatCurrency(afterSale) : '-';
-                        })()}
-                      </td>
-                      {/* Supplier Price */}
-                      <td className="px-3 text-sm text-gray-900 text-center border-r border-gray-100">
-                        {getSupplierPrice(product)}
-                      </td>
-                      {/* Profit $ */}
-                      <td className="px-3 text-sm text-center border-r border-gray-100">
-                        {(() => {
-                          const profit = getProfit(product);
-                          if (profit === '-') return <span className="text-gray-400">-</span>;
-                          return (
-                            <span className={`font-medium ${(profit as number) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                              ${(profit as number).toFixed(2)}
-                            </span>
-                          );
-                        })()}
-                      </td>
-                      {/* Profit % */}
-                      <td className="px-3 text-sm text-center border-r border-gray-100">
-                        {(() => {
-                          const profit = getProfit(product);
-                          const afterSale = getAfterSalePrice(product);
-                          if (profit === '-' || afterSale === null || afterSale === 0) return <span className="text-gray-400">-</span>;
-                          const pct = ((profit as number) / afterSale) * 100;
-                          return (
-                            <span className={`font-medium ${pct >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                              {pct.toFixed(1)}%
-                            </span>
-                          );
-                        })()}
-                      </td>
-                      {/* Supplier */}
+                      {/* Store Name */}
                       <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
-                        {product.supplier_name || '-'}
+                        {product.store_name || '-'}
+                      </td>
+                      {/* Monthly Sales */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.weekly_monthly_sales || '-'}
+                      </td>
+                      {/* Store Age */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.store_age || '-'}
+                      </td>
+                      {/* Competitors */}
+                      <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100 truncate">
+                        {product.competitors || '-'}
                       </td>
                       {/* Remarks */}
                       <td className="px-3 text-sm text-gray-600 text-center border-r border-gray-100">
@@ -1736,6 +1836,9 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
                 {/* Product Name (full row) */}
                 <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={(e) => { e.stopPropagation(); handleUpdateProduct(product.id, { is_starred: !product.is_starred }); }}>
+                    <Star className={`w-4 h-4 ${product.is_starred ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`} />
+                  </button>
                   <h3 className="font-semibold text-gray-900 text-sm">{product.name}</h3>
                   {getStatusBadge(product)}
                   {product.is_out_of_stock && (
@@ -1937,6 +2040,14 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                   <p className="text-sm text-gray-400 italic">No variations added yet.</p>
                 ) : (
                   <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5 px-2 text-xs text-gray-400 font-medium uppercase">
+                      <div className="w-4 flex-shrink-0" />
+                      <div className="w-10 flex-shrink-0" />
+                      <div className="flex-1">Name</div>
+                      <div className="w-20 text-center">Etsy $</div>
+                      <div className="w-20 text-center">Supplier $</div>
+                      <div className="w-6 flex-shrink-0" />
+                    </div>
                     {selectedProduct.variations.map((variation, idx) => (
                       <div
                         key={variation.id}
@@ -1979,7 +2090,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                             placeholder="Variation name"
                           />
                         </div>
-                        {/* Price */}
+                        {/* Etsy Full Price */}
                         <div className="w-20">
                           <div className="relative">
                             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">$</span>
@@ -1987,7 +2098,20 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                               type="number"
                               value={variation.price || 0}
                               onChange={(v) => handleUpdateVariation(variation.id, { price: parseFloat(String(v)) || 0 })}
-                              placeholder="0.00"
+                              placeholder="Etsy $"
+                              className="pl-6"
+                            />
+                          </div>
+                        </div>
+                        {/* Supplier Price */}
+                        <div className="w-20">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-green-500 text-xs pointer-events-none">$</span>
+                            <EditableField
+                              type="number"
+                              value={variation.supplier_price || 0}
+                              onChange={(v) => handleUpdateVariation(variation.id, { supplier_price: parseFloat(String(v)) || 0 })}
+                              placeholder="Sup $"
                               className="pl-6"
                             />
                           </div>
@@ -2145,82 +2269,6 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
-              {/* ── SECTION: Suppliers ── */}
-              <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Suppliers</h3>
-                  <button
-                    onClick={() => handleAddSupplier(selectedProduct.id)}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-white hover:opacity-90 transition-opacity"
-                    style={{ backgroundColor: BRAND_ORANGE }}
-                  >
-                    <Plus className="w-3 h-3" /> Add
-                  </button>
-                </div>
-
-                {(!selectedProduct.suppliers || selectedProduct.suppliers.length === 0) ? (
-                  <p className="text-sm text-gray-400 italic">No suppliers added yet.</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {selectedProduct.suppliers.map((supplier, idx) => (
-                      <div
-                        key={supplier.id}
-                        draggable
-                        onDragStart={() => handleSupplierDragStart(idx)}
-                        onDragOver={(e) => handleSupplierDragOver(e, idx)}
-                        onDrop={() => handleSupplierDrop(selectedProduct.id)}
-                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${
-                          supplier.is_selected
-                            ? 'bg-orange-50 border-orange-200'
-                            : 'bg-gray-50 border-gray-100'
-                        }`}
-                      >
-                        <div className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 flex-shrink-0">
-                          <GripVertical className="w-4 h-4" />
-                        </div>
-                        <input
-                          type="radio"
-                          name={`supplier-${selectedProduct.id}`}
-                          checked={supplier.is_selected}
-                          onChange={() => handleSelectSupplier(selectedProduct.id, supplier.id)}
-                          className="w-4 h-4 cursor-pointer flex-shrink-0"
-                          style={{ accentColor: BRAND_ORANGE }}
-                        />
-                        <div className="w-32">
-                          <EditableField
-                            value={supplier.name}
-                            onChange={(v) =>
-                              handleUpdateSupplier(supplier.id, selectedProduct.id, { name: String(v) })
-                            }
-                            placeholder="Supplier name"
-                          />
-                        </div>
-                        <div className="w-20">
-                          <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">$</span>
-                            <EditableField
-                              type="number"
-                              value={supplier.price}
-                              onChange={(v) =>
-                                handleUpdateSupplier(supplier.id, selectedProduct.id, { price: parseFloat(String(v)) || 0 })
-                              }
-                              placeholder="0.00"
-                              className="pl-6"
-                            />
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleDeleteSupplier(supplier.id, selectedProduct.id)}
-                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
               {/* ── SECTION: Links ── */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Links</h3>
@@ -2301,7 +2349,7 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Store / Competitor Research</h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-gray-600 mb-1">Store Name</label>
                     <EditableField
@@ -2322,6 +2370,24 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </div>
                       {selectedProduct.store_link && (
                         <a href={selectedProduct.store_link} target="_blank" rel="noopener noreferrer"
+                          className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-gray-500 hover:bg-gray-600">
+                          <ExternalLink className="w-4 h-4" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-600 mb-1">Product Link</label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <EditableField
+                          value={selectedProduct.competitor_product_link || ''}
+                          onChange={(v) => handleUpdateProduct(selectedProduct.id, { competitor_product_link: String(v) })}
+                          placeholder="https://www.etsy.com/listing/..."
+                        />
+                      </div>
+                      {selectedProduct.competitor_product_link && (
+                        <a href={selectedProduct.competitor_product_link} target="_blank" rel="noopener noreferrer"
                           className="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-white bg-gray-500 hover:bg-gray-600">
                           <ExternalLink className="w-4 h-4" />
                         </a>
@@ -2385,11 +2451,93 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                 </div>
               </div>
 
+              {/* ── SECTION: Suppliers ── */}
+              <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Suppliers</h3>
+                  <button
+                    onClick={() => handleAddSupplier(selectedProduct.id)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg text-white hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: BRAND_ORANGE }}
+                  >
+                    <Plus className="w-3 h-3" /> Add
+                  </button>
+                </div>
+
+                {(!selectedProduct.suppliers || selectedProduct.suppliers.length === 0) ? (
+                  <p className="text-sm text-gray-400 italic">No suppliers added yet.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {selectedProduct.suppliers.map((supplier, idx) => (
+                      <div
+                        key={supplier.id}
+                        draggable
+                        onDragStart={() => handleSupplierDragStart(idx)}
+                        onDragOver={(e) => handleSupplierDragOver(e, idx)}
+                        onDrop={() => handleSupplierDrop(selectedProduct.id)}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${
+                          supplier.is_selected
+                            ? 'bg-orange-50 border-orange-200'
+                            : 'bg-gray-50 border-gray-100'
+                        }`}
+                      >
+                        <div className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 flex-shrink-0">
+                          <GripVertical className="w-4 h-4" />
+                        </div>
+                        <input
+                          type="radio"
+                          name={`supplier-${selectedProduct.id}`}
+                          checked={supplier.is_selected}
+                          onChange={() => handleSelectSupplier(selectedProduct.id, supplier.id)}
+                          className="w-4 h-4 cursor-pointer flex-shrink-0"
+                          style={{ accentColor: BRAND_ORANGE }}
+                        />
+                        <div className="w-32">
+                          <EditableField
+                            value={supplier.name}
+                            onChange={(v) =>
+                              handleUpdateSupplier(supplier.id, selectedProduct.id, { name: String(v) })
+                            }
+                            placeholder="Supplier name"
+                          />
+                        </div>
+                        <div className="w-20">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none">$</span>
+                            <EditableField
+                              type="number"
+                              value={supplier.price}
+                              onChange={(v) =>
+                                handleUpdateSupplier(supplier.id, selectedProduct.id, { price: parseFloat(String(v)) || 0 })
+                              }
+                              placeholder="0.00"
+                              className="pl-6"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteSupplier(supplier.id, selectedProduct.id)}
+                          className="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors flex-shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* ── SECTION: Country Pricing ── */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">Pricing by Country</h3>
                 <div className="space-y-2">
-                  {COUNTRIES.map((country) => {
+                  {(() => {
+                    const mainCountries = COUNTRIES.filter(c => !COUNTRIES_LAST.includes(c));
+                    const extraCountries = (selectedProduct.pricing || [])
+                      .map(p => p.country)
+                      .filter(c => !COUNTRIES.includes(c));
+                    return [...mainCountries, ...extraCountries, ...COUNTRIES_LAST];
+                  })().map((country) => {
                     const pricing = selectedProduct.pricing?.find((p) => p.country === country);
                     return (
                       <div key={country} className="flex items-center gap-3 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
@@ -2426,6 +2574,82 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       </div>
                     );
                   })}
+                </div>
+
+                {/* Supplier Pricing Image */}
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Supplier Pricing Screenshot</label>
+                  {selectedProduct.supplier_pricing_image ? (
+                    <div className="space-y-2">
+                      <div className="relative group">
+                        <img
+                          src={selectedProduct.supplier_pricing_image}
+                          alt="Supplier pricing"
+                          className="w-full rounded-lg border border-gray-200 cursor-pointer"
+                          onClick={() => setEnlargedImage(selectedProduct.supplier_pricing_image!)}
+                        />
+                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <label className="p-1.5 bg-white/90 hover:bg-white rounded-lg shadow cursor-pointer">
+                          <Upload className="w-4 h-4 text-gray-600" />
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              const result = await uploadOrderImage(file, `pricing_${selectedProduct.id}`);
+                              if (result.success && result.url) {
+                                handleUpdateProduct(selectedProduct.id, { supplier_pricing_image: result.url });
+                              }
+                            }}
+                          />
+                        </label>
+                        <button
+                          onClick={() => handleUpdateProduct(selectedProduct.id, { supplier_pricing_image: null as any })}
+                          className="p-1.5 bg-white/90 hover:bg-white rounded-lg shadow"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </div>
+                      </div>
+                      <button
+                        onClick={() => handleExtractPrices(selectedProduct)}
+                        disabled={extractingPrices}
+                        className="w-full py-2 px-3 bg-blue-500 hover:bg-blue-600 disabled:bg-blue-300 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                      >
+                        {extractingPrices ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                            Extracting prices...
+                          </>
+                        ) : (
+                          <>
+                            <DollarSign className="w-4 h-4" />
+                            Extract Prices from Image
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-gray-200 rounded-lg cursor-pointer hover:border-orange-300 hover:bg-orange-50/30 transition-colors">
+                      <Upload className="w-5 h-5 text-gray-400 mb-1" />
+                      <span className="text-xs text-gray-400">Upload pricing table image</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const result = await uploadOrderImage(file, `pricing_${selectedProduct.id}`);
+                          if (result.success && result.url) {
+                            handleUpdateProduct(selectedProduct.id, { supplier_pricing_image: result.url });
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
                 </div>
               </div>
 

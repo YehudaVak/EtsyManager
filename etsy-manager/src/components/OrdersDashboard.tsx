@@ -359,12 +359,19 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       variation_id: variationId || undefined,
     };
 
-    // Override image and product_name with variation data
+    // Override image, product_name, and costs with variation data
     if (variation) {
       if (variation.image_url) {
         updates.image_url = variation.image_url;
       }
       updates.product_name = `${product?.name} – ${variation.name}`;
+      const salePercent = product?.sale_percent ?? 35;
+      if (variation.price != null) {
+        updates.sold_for = variation.price * (1 - salePercent / 100);
+      }
+      if (variation.supplier_price != null) {
+        updates.product_cost = variation.supplier_price;
+      }
     } else {
       // "None" selected — revert to base product
       updates.image_url = product?.image_url || undefined;
@@ -562,18 +569,68 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     let skipped = 0;
 
     try {
+      // Group parsed orders by etsy_order_no to handle multi-item orders
+      const orderGroups = new Map<string, typeof importParsed>();
       for (const parsed of importParsed) {
-        // Check if order already exists by etsy_order_no + product_name
-        const { data: existing } = await supabase
-          .from('orders')
-          .select('id, tracking_number, address, has_vat, vat_number, vat_amount, quantity, ship_by')
-          .eq('store_id', selectedStore.id)
-          .eq('etsy_order_no', parsed.etsy_order_no)
-          .eq('product_name', parsed.product_name);
+        const group = orderGroups.get(parsed.etsy_order_no) || [];
+        group.push(parsed);
+        orderGroups.set(parsed.etsy_order_no, group);
+      }
 
-        if (existing && existing.length > 0) {
-          // Order exists - check if there's anything to update
-          const existingOrder = existing[0];
+      // Pre-fetch all existing orders for these order numbers
+      const orderNos = [...orderGroups.keys()];
+      const { data: allExisting } = await supabase
+        .from('orders')
+        .select('id, etsy_order_no, product_name, tracking_number, address, has_vat, vat_number, vat_amount, quantity, ship_by')
+        .eq('store_id', selectedStore.id)
+        .in('etsy_order_no', orderNos);
+
+      const existingByOrderNo = new Map<string, typeof allExisting>();
+      for (const row of allExisting || []) {
+        const group = existingByOrderNo.get(row.etsy_order_no!) || [];
+        group.push(row);
+        existingByOrderNo.set(row.etsy_order_no!, group);
+      }
+
+      for (const parsed of importParsed) {
+        const existingRows = existingByOrderNo.get(parsed.etsy_order_no) || [];
+
+        // If any rows exist for this order number, find the best match
+        let existingOrder: (typeof existingRows)[0] | undefined;
+
+        if (existingRows.length > 0) {
+          const parsedItems = orderGroups.get(parsed.etsy_order_no)!;
+
+          // 1. Exact product_name match
+          existingOrder = existingRows.find(e => e.product_name === parsed.product_name);
+
+          // 2. Match by variation suffix (text after " – ")
+          if (!existingOrder) {
+            const parsedVariation = parsed.product_name?.split(' – ').pop()?.trim();
+            if (parsedVariation) {
+              existingOrder = existingRows.find(e => e.product_name?.split(' – ').pop()?.trim() === parsedVariation);
+            }
+          }
+
+          // 3. Single-item order on both sides — must be the same
+          if (!existingOrder && existingRows.length === 1 && parsedItems.length === 1) {
+            existingOrder = existingRows[0];
+          }
+
+          // 4. Same count of items — match by position
+          if (!existingOrder && existingRows.length === parsedItems.length) {
+            const idx = parsedItems.indexOf(parsed);
+            existingOrder = existingRows[idx];
+          }
+
+          // 5. Order number exists but no match found — still skip to avoid duplicates
+          if (!existingOrder) {
+            skipped++;
+            continue;
+          }
+        }
+
+        if (existingOrder) {
           const updates: Record<string, any> = {};
 
           // Update tracking if it was added
@@ -1011,7 +1068,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {/* Header */}
       <header className={`${headerBg} ${headerText} sticky top-0 z-50 shadow-sm`}>
         <div className="px-4 py-3 pl-14 lg:pl-4">
@@ -1215,9 +1272,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       )}
 
       {/* Desktop Table View - Simplified */}
-      <div className="hidden lg:block p-4">
-        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
-          <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
+      <div className="hidden lg:flex flex-col px-4 pt-4 pb-1 flex-1 min-h-0">
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200 flex-1 min-h-0 flex flex-col">
+          <div className="overflow-auto flex-1">
             <table style={{ tableLayout: 'fixed', width: Math.max(Object.values(columnWidths).reduce((a, b) => a + b, 0) + 40, 0) }}>
               {/* Table Header */}
               <thead className="sticky top-0 z-20">
@@ -1711,7 +1768,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
         {/* Summary Footer for Desktop */}
         {isAdmin && orders.length > 0 && (
-          <div className="mt-4 flex justify-end gap-6 text-sm">
+          <div className="py-2 flex justify-end gap-6 text-sm flex-shrink-0">
             <span className="text-gray-600">{filteredOrders.length} orders</span>
             <span className="text-gray-600">Total Sales: <strong className="text-green-600">{formatCurrency(filteredOrders.reduce((s, o) => s + (o.sold_for || 0), 0))}</strong></span>
             <span className="text-gray-600">Total Profit: <strong style={{ color: BRAND_ORANGE }}>{formatCurrency(filteredOrders.reduce((s, o) => s + (o.profit || 0), 0))}</strong></span>
@@ -2023,9 +2080,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
                   {isAdmin && (() => {
                     const linkedProduct = products.find(p => p.id === order.product_id);
-                    const etsyPrice = linkedProduct?.etsy_full_price || null;
+                    const selectedVariation = order.variation_id ? linkedProduct?.variations?.find(v => v.id === order.variation_id) : null;
+                    const etsyPrice = selectedVariation?.price ?? linkedProduct?.etsy_full_price ?? null;
                     const salePercent = linkedProduct?.sale_percent ?? 30;
-                    const supplierPrice = linkedProduct?.supplier_price || null;
+                    const supplierPrice = selectedVariation?.supplier_price ?? linkedProduct?.supplier_price ?? null;
                     const supplierName = linkedProduct?.supplier_name || null;
                     const afterSale = etsyPrice ? etsyPrice * (1 - salePercent / 100) : null;
                     const etsyFee = afterSale ? afterSale * 0.12 : null;
@@ -2777,9 +2835,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               {/* Financial Section (Admin Only) */}
               {isAdmin && (() => {
                 const linkedProduct = products.find(p => p.id === selectedOrder.product_id);
-                const etsyPrice = linkedProduct?.etsy_full_price || null;
+                const selectedVariation = selectedOrder.variation_id ? linkedProduct?.variations?.find(v => v.id === selectedOrder.variation_id) : null;
+                const etsyPrice = selectedVariation?.price ?? linkedProduct?.etsy_full_price ?? null;
                 const salePercent = linkedProduct?.sale_percent ?? 30;
-                const supplierPrice = linkedProduct?.supplier_price || null;
+                const supplierPrice = selectedVariation?.supplier_price ?? linkedProduct?.supplier_price ?? null;
                 const supplierName = linkedProduct?.supplier_name || null;
                 const afterSale = etsyPrice ? etsyPrice * (1 - salePercent / 100) : null;
                 const etsyFee = afterSale ? afterSale * 0.12 : null;
