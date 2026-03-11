@@ -6,11 +6,57 @@ import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supab
 import { parseEtsyOrders, ParsedEtsyOrder } from '@/lib/etsy-parser';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy } from 'lucide-react';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu } from 'lucide-react';
+import { useSidebar } from '@/lib/sidebar-context';
 import EditableField from './EditableField';
 
 interface OrdersDashboardProps {
   isAdmin: boolean;
+}
+
+// Match product by name with fuzzy word-overlap
+function matchProductByName(baseName: string, products: { id: string; name: string | null; image_url?: string | null; supplier_name?: string | null; supplier_price?: number | null }[]) {
+  if (!baseName) return null;
+  const lowerBase = baseName.toLowerCase();
+
+  // 1. Exact match
+  let match = products.find(p => p.name === baseName);
+  if (match) return match;
+
+  // 2. Case-insensitive match
+  match = products.find(p => p.name?.toLowerCase() === lowerBase);
+  if (match) return match;
+
+  // 3. Substring match (one contains the other)
+  if (baseName.length > 15) {
+    match = products.find(p => {
+      if (!p.name) return false;
+      const lp = p.name.toLowerCase();
+      return lowerBase.includes(lp) || lp.includes(lowerBase);
+    });
+    if (match) return match;
+  }
+
+  // 4. Fuzzy word-overlap: if >70% of significant words match, consider it the same product
+  const baseWords = lowerBase.split(/[\s|,]+/).filter(w => w.length > 2);
+  if (baseWords.length >= 3) {
+    let bestMatch: typeof products[0] | null = null;
+    let bestScore = 0;
+    for (const p of products) {
+      if (!p.name) continue;
+      const prodWords = p.name.toLowerCase().split(/[\s|,]+/).filter(w => w.length > 2);
+      if (prodWords.length < 3) continue;
+      const commonWords = baseWords.filter(w => prodWords.includes(w));
+      const score = commonWords.length / Math.max(baseWords.length, prodWords.length);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = p;
+      }
+    }
+    if (bestMatch && bestScore >= 0.7) return bestMatch;
+  }
+
+  return null;
 }
 
 // Custom orange color
@@ -25,6 +71,7 @@ const formatDate = (date: string | undefined | null): string => {
 };
 
 export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
+  const { setMobileOpen } = useSidebar();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -62,6 +109,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [importPreview, setImportPreview] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importResults, setImportResults] = useState<{ added: number; updated: number; skipped: number } | null>(null);
+  const [importExisting, setImportExisting] = useState<Set<string>>(new Set()); // order numbers already in DB
+  const [importMatched, setImportMatched] = useState<Map<string, { image_url?: string; supplier_name?: string }>>(new Map()); // product matches by order index
+  const [importReplaceExisting, setImportReplaceExisting] = useState(false); // replace existing orders option
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
@@ -550,12 +600,52 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     }
   };
 
-  // Import from Etsy - parse raw text
-  const handleImportParse = () => {
+  // Import from Etsy - parse raw text + check existing + match products
+  const handleImportParse = async () => {
     const parsed = parseEtsyOrders(importRawText);
     setImportParsed(parsed);
     setImportPreview(true);
     setImportResults(null);
+
+    if (!selectedStore) return;
+
+    // Check which order numbers already exist in DB
+    const orderNos = [...new Set(parsed.map(p => p.etsy_order_no))];
+    const { data: existingOrders } = await supabase
+      .from('orders')
+      .select('etsy_order_no')
+      .eq('store_id', selectedStore.id)
+      .in('etsy_order_no', orderNos);
+    const existingSet = new Set((existingOrders || []).map(o => o.etsy_order_no!));
+    setImportExisting(existingSet);
+
+    // Pre-match products from catalog (including variations)
+    const { data: allProducts } = await supabase
+      .from('products')
+      .select('id, name, image_url, supplier_name')
+      .eq('store_id', selectedStore.id);
+    const prodIds = (allProducts || []).map(p => p.id);
+    const { data: previewVariations } = prodIds.length > 0
+      ? await supabase.from('product_variations').select('id, product_id, name, image_url').in('product_id', prodIds)
+      : { data: [] as any[] };
+    const matchMap = new Map<string, { image_url?: string; supplier_name?: string }>();
+    parsed.forEach((p, idx) => {
+      const baseName = p.product_name?.split(' – ')[0]?.trim() || '';
+      const matched = matchProductByName(baseName, allProducts || []);
+      if (matched) {
+        let imgUrl = matched.image_url || undefined;
+        // Check for variation-specific image
+        const variationName = p.product_name?.split(' – ')[1]?.trim();
+        if (variationName) {
+          const pVars = (previewVariations || []).filter(v => v.product_id === matched.id);
+          const matchedVar = pVars.find(v => v.name === variationName) ||
+                             pVars.find(v => v.name?.toLowerCase() === variationName.toLowerCase());
+          if (matchedVar?.image_url) imgUrl = matchedVar.image_url;
+        }
+        matchMap.set(`${idx}`, { image_url: imgUrl, supplier_name: matched.supplier_name || undefined });
+      }
+    });
+    setImportMatched(matchMap);
   };
 
   // Import from Etsy - upsert orders
@@ -567,146 +657,163 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     let added = 0;
     let updated = 0;
     let skipped = 0;
+    const errors: string[] = [];
 
     try {
-      // Group parsed orders by etsy_order_no to handle multi-item orders
-      const orderGroups = new Map<string, typeof importParsed>();
-      for (const parsed of importParsed) {
-        const group = orderGroups.get(parsed.etsy_order_no) || [];
-        group.push(parsed);
-        orderGroups.set(parsed.etsy_order_no, group);
-      }
+      // Pre-fetch all products and their variations for matching
+      const { data: allProducts } = await supabase
+        .from('products')
+        .select('id, name, image_url, supplier_name, supplier_price')
+        .eq('store_id', selectedStore.id);
+
+      // Pre-fetch all variations for matched products
+      const productIds = (allProducts || []).map(p => p.id);
+      const { data: allVariations } = productIds.length > 0
+        ? await supabase.from('product_variations').select('id, product_id, name, image_url').in('product_id', productIds)
+        : { data: [] as any[] };
 
       // Pre-fetch all existing orders for these order numbers
-      const orderNos = [...orderGroups.keys()];
+      const orderNos = [...new Set(importParsed.map(p => p.etsy_order_no))];
       const { data: allExisting } = await supabase
         .from('orders')
-        .select('id, etsy_order_no, product_name, tracking_number, address, has_vat, vat_number, vat_amount, quantity, ship_by')
+        .select('id, etsy_order_no, product_name')
         .eq('store_id', selectedStore.id)
         .in('etsy_order_no', orderNos);
 
-      const existingByOrderNo = new Map<string, typeof allExisting>();
-      for (const row of allExisting || []) {
-        const group = existingByOrderNo.get(row.etsy_order_no!) || [];
-        group.push(row);
-        existingByOrderNo.set(row.etsy_order_no!, group);
+      console.log(`[import] Found ${allExisting?.length || 0} existing orders in DB, replace=${importReplaceExisting}`);
+
+      // If "replace existing" is on, delete all existing orders for these order numbers first
+      if (importReplaceExisting && allExisting && allExisting.length > 0) {
+        const existingIds = allExisting.map(o => o.id);
+        const { error: delError } = await supabase.from('orders').delete().in('id', existingIds);
+        if (delError) {
+          console.error('[import] Failed to delete existing orders:', delError);
+          errors.push(`Delete failed: ${delError.message}`);
+        } else {
+          console.log(`[import] Deleted ${existingIds.length} existing orders`);
+          setOrders(prev => prev.filter(o => !existingIds.includes(o.id)));
+        }
       }
 
+      // Build set of existing order numbers (empty if we just deleted them)
+      const existingOrderNos = new Set<string>();
+      if (!importReplaceExisting && allExisting) {
+        for (const row of allExisting) {
+          if (row.etsy_order_no) existingOrderNos.add(row.etsy_order_no);
+        }
+      }
+
+      // Insert all orders — batch insert for reliability
+      const newOrders: Record<string, any>[] = [];
+
       for (const parsed of importParsed) {
-        const existingRows = existingByOrderNo.get(parsed.etsy_order_no) || [];
+        // Skip if order already exists and we're not replacing
+        if (existingOrderNos.has(parsed.etsy_order_no)) {
+          console.log(`[import] Skipping existing order #${parsed.etsy_order_no}`);
+          skipped++;
+          continue;
+        }
 
-        // If any rows exist for this order number, find the best match
-        let existingOrder: (typeof existingRows)[0] | undefined;
+        // Match to existing product by name (exact, case-insensitive, substring, fuzzy word-overlap)
+        const baseName = parsed.product_name?.split(' – ')[0]?.trim() || '';
+        const matchedProduct = matchProductByName(baseName, allProducts || []);
 
-        if (existingRows.length > 0) {
-          const parsedItems = orderGroups.get(parsed.etsy_order_no)!;
+        const newOrder: Record<string, any> = {
+          store_id: selectedStore.id,
+          etsy_order_no: parsed.etsy_order_no,
+          customer_name: parsed.customer_name,
+          address: parsed.address,
+          product_name: parsed.product_name,
+          quantity: parsed.quantity,
+          sold_for: parsed.sold_for,
+          ordered_date: parsed.ordered_date || null,
+          ship_by: parsed.ship_by || null,
+          fees_percent: 12.5,
+        };
 
-          // 1. Exact product_name match
-          existingOrder = existingRows.find(e => e.product_name === parsed.product_name);
+        // Only set optional fields if they have values (avoid sending undefined to Supabase)
+        if (parsed.color) newOrder.color = parsed.color;
+        if (parsed.size) newOrder.size = parsed.size;
 
-          // 2. Match by variation suffix (text after " – ")
-          if (!existingOrder) {
-            const parsedVariation = parsed.product_name?.split(' – ').pop()?.trim();
-            if (parsedVariation) {
-              existingOrder = existingRows.find(e => e.product_name?.split(' – ').pop()?.trim() === parsedVariation);
-            }
-          }
+        // Link to matched product
+        if (matchedProduct) {
+          newOrder.product_id = matchedProduct.id;
+          if (matchedProduct.supplier_name) newOrder.order_from = matchedProduct.supplier_name;
+          if (matchedProduct.supplier_price) newOrder.total_amount_to_pay = matchedProduct.supplier_price * parsed.quantity;
 
-          // 3. Single-item order on both sides — must be the same
-          if (!existingOrder && existingRows.length === 1 && parsedItems.length === 1) {
-            existingOrder = existingRows[0];
-          }
+          // Try to match variation by name (text after " – " in product_name)
+          const variationName = parsed.product_name?.split(' – ')[1]?.trim();
+          const productVariations = (allVariations || []).filter(v => v.product_id === matchedProduct.id);
+          let matchedVariation = variationName
+            ? productVariations.find(v => v.name === variationName) ||
+              productVariations.find(v => v.name?.toLowerCase() === variationName.toLowerCase())
+            : null;
 
-          // 4. Same count of items — match by position
-          if (!existingOrder && existingRows.length === parsedItems.length) {
-            const idx = parsedItems.indexOf(parsed);
-            existingOrder = existingRows[idx];
-          }
-
-          // 5. Order number exists but no match found — still skip to avoid duplicates
-          if (!existingOrder) {
-            skipped++;
-            continue;
+          if (matchedVariation) {
+            newOrder.variation_id = matchedVariation.id;
+            if (matchedVariation.image_url) newOrder.image_url = matchedVariation.image_url;
+            console.log(`[import] Matched #${parsed.etsy_order_no} → variation "${matchedVariation.name}" (id: ${matchedVariation.id})`);
+          } else if (matchedProduct.image_url) {
+            newOrder.image_url = matchedProduct.image_url;
+            console.log(`[import] Matched #${parsed.etsy_order_no} → product "${matchedProduct.name}" (no variation match)`);
           }
         }
 
-        if (existingOrder) {
-          const updates: Record<string, any> = {};
+        if (parsed.tracking_number) {
+          newOrder.tracking_number = parsed.tracking_number;
+          newOrder.tracking_added = true;
+        }
+        if (parsed.has_vat) {
+          newOrder.has_vat = true;
+          if (parsed.vat_number) newOrder.vat_number = parsed.vat_number;
+          if (parsed.vat_amount) newOrder.vat_amount = parsed.vat_amount;
+        }
 
-          // Update tracking if it was added
-          if (parsed.tracking_number && !existingOrder.tracking_number) {
-            updates.tracking_number = parsed.tracking_number;
-            updates.tracking_added = true;
-          }
-          // Update address if empty
-          if (parsed.address && !existingOrder.address) {
-            updates.address = parsed.address;
-          }
-          // Update VAT if new
-          if (parsed.has_vat && !existingOrder.has_vat) {
-            updates.has_vat = true;
-            if (parsed.vat_number) updates.vat_number = parsed.vat_number;
-            if (parsed.vat_amount) updates.vat_amount = parsed.vat_amount;
-          }
+        newOrders.push(newOrder);
+      }
 
-          if (Object.keys(updates).length > 0) {
-            const { error } = await supabase
+      console.log(`[import] Inserting ${newOrders.length} new orders...`);
+
+      if (newOrders.length > 0) {
+        // Batch insert all at once for reliability
+        const { data: insertedData, error: insertError } = await supabase
+          .from('orders')
+          .insert(newOrders)
+          .select();
+
+        if (insertError) {
+          console.error('[import] Batch insert failed:', insertError);
+          errors.push(`Insert failed: ${insertError.message}`);
+          // Fallback: try one by one to find which ones fail
+          for (const newOrder of newOrders) {
+            const { data, error } = await supabase
               .from('orders')
-              .update(updates)
-              .eq('id', existingOrder.id);
-            if (!error) {
-              updated++;
-              // Update local state
-              setOrders(prev => prev.map(o =>
-                o.id === existingOrder.id ? { ...o, ...updates } : o
-              ));
+              .insert(newOrder)
+              .select()
+              .single();
+            if (error) {
+              console.error(`[import] Failed to insert #${newOrder.etsy_order_no}:`, error.message);
+              errors.push(`#${newOrder.etsy_order_no}: ${error.message}`);
+            } else if (data) {
+              added++;
+              setOrders(prev => [data, ...prev]);
             }
-          } else {
-            skipped++;
           }
-        } else {
-          // New order - insert
-          const newOrder: Record<string, any> = {
-            store_id: selectedStore.id,
-            etsy_order_no: parsed.etsy_order_no,
-            customer_name: parsed.customer_name,
-            address: parsed.address,
-            product_name: parsed.product_name,
-            quantity: parsed.quantity,
-            sold_for: parsed.sold_for,
-            ordered_date: parsed.ordered_date,
-            ship_by: parsed.ship_by,
-            fees_percent: 12.5,
-            color: parsed.color || undefined,
-            size: parsed.size || undefined,
-          };
-
-          if (parsed.tracking_number) {
-            newOrder.tracking_number = parsed.tracking_number;
-            newOrder.tracking_added = true;
-          }
-          if (parsed.has_vat) {
-            newOrder.has_vat = true;
-            if (parsed.vat_number) newOrder.vat_number = parsed.vat_number;
-            if (parsed.vat_amount) newOrder.vat_amount = parsed.vat_amount;
-          }
-
-          const { data, error } = await supabase
-            .from('orders')
-            .insert(newOrder)
-            .select()
-            .single();
-
-          if (!error && data) {
-            added++;
-            setOrders(prev => [data, ...prev]);
-          }
+        } else if (insertedData) {
+          added = insertedData.length;
+          setOrders(prev => [...insertedData, ...prev]);
+          console.log(`[import] Successfully inserted ${insertedData.length} orders`);
         }
       }
 
       setImportResults({ added, updated, skipped });
-    } catch (error) {
-      console.error('Error importing orders:', error);
+      if (errors.length > 0) {
+        console.error('[import] Errors:', errors);
+        alert(`Import completed with errors:\n${errors.join('\n')}`);
+      }
+    } catch (error: any) {
+      console.error('[import] Critical error:', error);
+      alert(`Import failed: ${error?.message || String(error)}`);
     } finally {
       setImportLoading(false);
     }
@@ -720,6 +827,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     setImportPreview(false);
     setImportResults(null);
     setImportLoading(false);
+    setImportExisting(new Set());
+    setImportMatched(new Map());
+    setImportReplaceExisting(false);
   };
 
   // Acknowledge order when supplier views it (for non-admin)
@@ -1068,15 +1178,25 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   );
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+    <div className="min-h-screen lg:h-screen bg-gray-50 flex flex-col lg:overflow-hidden">
       {/* Header */}
       <header className={`${headerBg} ${headerText} sticky top-0 z-50 shadow-sm`}>
-        <div className="px-4 py-3 pl-14 lg:pl-4">
-          <div className="flex items-center justify-between gap-4">
-            <h1 className="text-xl font-bold flex-1 text-center lg:text-left">
-              {isAdmin ? 'Orders' : 'Supplier Orders'}
-            </h1>
-            <div className="flex items-center gap-2">
+        <div className="px-4 py-3 lg:pl-4">
+          <div className="flex items-center justify-between gap-2">
+            {/* Mobile: hamburger + title */}
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <button
+                onClick={() => setMobileOpen(true)}
+                className="lg:hidden p-2 rounded-lg text-gray-500 hover:bg-gray-100 flex-shrink-0"
+                title="Menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <h1 className="text-xl font-bold truncate">
+                {isAdmin ? 'Orders' : 'Supplier Orders'}
+              </h1>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
               <button
                 onClick={fetchOrders}
                 className={`p-2 rounded-lg ${isAdmin ? 'text-gray-500 hover:bg-gray-100' : 'hover:bg-blue-700'}`}
@@ -1087,7 +1207,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               {isAdmin && (
                 <button
                   onClick={() => setImportModalOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity bg-green-600"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity bg-green-600"
+                  title="Import Etsy"
                 >
                   <Upload className="w-5 h-5" />
                   <span className="hidden sm:inline">Import Etsy</span>
@@ -1095,8 +1216,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               )}
               <button
                 onClick={handleAddOrder}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity"
                 style={{ backgroundColor: isAdmin ? BRAND_ORANGE : undefined }}
+                title="New Order"
               >
                 <Plus className="w-5 h-5" />
                 <span className="hidden sm:inline">{isAdmin ? 'New Order' : 'New'}</span>
@@ -1600,7 +1722,12 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                           <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(order.ordered_date)}</td>
                           <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{(order.quantity ?? 1) > 1 ? <span className="font-semibold text-orange-600">×{order.quantity}</span> : <span className="text-gray-400">1</span>}</td>
                           <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">{formatDate(order.ship_by)}</td>
-                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.product_name || ''}>{order.product_name || '-'}</div></td>
+                          <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100">
+                            <div className="line-clamp-2" title={order.product_name || ''}>{order.product_name?.split(' – ')[0] || '-'}</div>
+                            {order.product_name?.includes(' – ') && (
+                              <span className="inline-block mt-0.5 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">{order.product_name.split(' – ')[1]}</span>
+                            )}
+                          </td>
                           <td className="px-3 py-3 text-center text-base text-gray-900 font-medium border-r border-gray-100"><div className="line-clamp-2" title={order.tracking_number || ''}>{order.tracking_number || '-'}</div></td>
                           <td className="px-3 py-3 text-center text-base text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.customer_name || ''}>{order.customer_name || '-'}</div></td>
                           <td className="px-3 py-3 text-center text-base text-gray-700 border-r border-gray-100"><div className="line-clamp-2" title={order.address || ''}>{order.address || '-'}</div></td>
@@ -1742,7 +1869,12 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <td className="px-3 py-2 text-center text-sm text-gray-500 border-r border-gray-100">{formatDate(order.ordered_date)}</td>
                             <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100">{(order.quantity ?? 1) > 1 ? <span className="font-semibold text-orange-600">×{order.quantity}</span> : <span className="text-gray-400">1</span>}</td>
                             <td className="px-3 py-2 text-center text-sm text-gray-500 border-r border-gray-100">{formatDate(order.ship_by)}</td>
-                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-2 font-medium" title={order.product_name || ''}>{order.product_name || '-'}</div></td>
+                            <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100">
+                              <div className="line-clamp-2 font-medium" title={order.product_name || ''}>{order.product_name?.split(' – ')[0] || '-'}</div>
+                              {order.product_name?.includes(' – ') && (
+                                <span className="inline-block mt-0.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[11px] font-medium">{order.product_name.split(' – ')[1]}</span>
+                              )}
+                            </td>
                             <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-1" title={order.tracking_number || ''}>{order.tracking_number || '-'}</div></td>
                             <td className="px-3 py-2 text-center text-sm text-gray-900 border-r border-gray-100"><div className="line-clamp-2" title={order.customer_name || ''}>{order.customer_name || '-'}</div></td>
                             <td className="px-3 py-2 text-center text-sm text-gray-700 border-r border-gray-100"><div className="line-clamp-2" title={order.address || ''}>{order.address || '-'}</div></td>
@@ -1827,7 +1959,10 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
                   {/* Product Name + Status badges */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-semibold text-gray-900 text-sm truncate">{order.product_name || 'New Order'}</h3>
+                    <h3 className="font-semibold text-gray-900 text-sm truncate">{order.product_name?.split(' – ')[0] || 'New Order'}</h3>
+                    {order.product_name?.includes(' – ') && (
+                      <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">{order.product_name.split(' – ')[1]}</span>
+                    )}
                     {!isGroupChild && order.etsy_order_no && <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>}
                     {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
                     {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
@@ -3089,41 +3224,72 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       </p>
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-600 mb-3">
-                      Found <strong>{importParsed.length}</strong> order items. Review before importing:
-                    </p>
+                    <div className="mb-3">
+                      <p className="text-sm text-gray-600">
+                        Found <strong>{importParsed.length}</strong> orders.
+                        {importExisting.size > 0 && (
+                          <span className="ml-1 text-amber-600">
+                            ({importExisting.size} already in database)
+                          </span>
+                        )}
+                      </p>
+                      {importExisting.size > 0 && (
+                        <label className="flex items-center gap-2 mt-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={importReplaceExisting}
+                            onChange={(e) => setImportReplaceExisting(e.target.checked)}
+                            className="rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                          />
+                          <span className="text-amber-700 font-medium">Replace existing orders (delete &amp; re-import)</span>
+                        </label>
+                      )}
+                    </div>
                   )}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm border-collapse">
-                      <thead>
-                        <tr className="bg-gray-100">
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">#</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Order No</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Customer</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Product</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Qty</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Price</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Date</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">Tracking</th>
-                          <th className="px-2 py-1.5 text-left font-medium text-gray-700 border">VAT</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {importParsed.map((order, idx) => (
-                          <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                            <td className="px-2 py-1.5 border text-gray-500">{idx + 1}</td>
-                            <td className="px-2 py-1.5 border font-mono text-xs">{order.etsy_order_no}</td>
-                            <td className="px-2 py-1.5 border">{order.customer_name}</td>
-                            <td className="px-2 py-1.5 border max-w-[200px] truncate" title={order.product_name}>{order.product_name}</td>
-                            <td className="px-2 py-1.5 border text-center">{order.quantity}</td>
-                            <td className="px-2 py-1.5 border">${order.sold_for}</td>
-                            <td className="px-2 py-1.5 border">{order.ordered_date}</td>
-                            <td className="px-2 py-1.5 border font-mono text-xs">{order.tracking_number || '-'}</td>
-                            <td className="px-2 py-1.5 border text-center">{order.has_vat ? 'Yes' : '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="space-y-3">
+                    {importParsed.map((order, idx) => {
+                      const variation = order.style || order.color || order.size;
+                      const isExisting = importExisting.has(order.etsy_order_no);
+                      const match = importMatched.get(`${idx}`);
+                      const willSkip = isExisting && !importReplaceExisting;
+                      return (
+                        <div key={idx} className={`border rounded-lg p-3 text-sm ${willSkip ? 'opacity-50 bg-gray-50' : 'bg-white'} ${isExisting ? 'border-amber-300' : 'border-gray-200'}`}>
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-gray-800">#{idx + 1}</span>
+                              <span className="font-mono text-xs text-gray-500">Order {order.etsy_order_no}</span>
+                              {isExisting && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                                  {importReplaceExisting ? 'WILL REPLACE' : 'EXISTS — SKIP'}
+                                </span>
+                              )}
+                              {!isExisting && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">NEW</span>
+                              )}
+                              {match && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">MATCHED</span>
+                              )}
+                            </div>
+                            <span className="font-bold text-gray-900">${order.sold_for}
+                              {order.sale_percent ? <span className="ml-1 text-xs font-normal text-red-500">({order.sale_percent}% off)</span> : ''}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                            <div><span className="text-gray-500">Product:</span> <span className="font-medium">{order.product_name?.split(' – ')[0]?.slice(0, 50)}</span></div>
+                            {variation && <div><span className="text-gray-500">Variation:</span> <span className="font-medium">{variation}</span></div>}
+                            <div><span className="text-gray-500">Customer:</span> {order.customer_name}</div>
+                            <div><span className="text-gray-500">Quantity:</span> {order.quantity}</div>
+                            <div><span className="text-gray-500">Ordered:</span> {order.ordered_date}</div>
+                            <div><span className="text-gray-500">Ship By:</span> {order.ship_by}</div>
+                            {order.coupon_code && <div><span className="text-gray-500">Coupon:</span> {order.coupon_code}</div>}
+                            {order.has_vat && <div><span className="text-gray-500">VAT:</span> Yes{order.vat_amount ? ` (${order.vat_amount})` : ''}</div>}
+                            {order.is_gift && <div><span className="text-gray-500">Gift:</span> Yes</div>}
+                            {match?.supplier_name && <div><span className="text-gray-500">Supplier:</span> <span className="text-blue-600">{match.supplier_name}</span></div>}
+                          </div>
+                          <div className="mt-1.5 text-xs text-gray-400 whitespace-pre-line">{order.address}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -3168,7 +3334,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         className="px-4 py-2 text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
                       >
                         {importLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
-                        {importLoading ? 'Importing...' : `Import ${importParsed.length} Orders`}
+                        {importLoading ? 'Importing...' : `Import ${importReplaceExisting ? importParsed.length : importParsed.length - importExisting.size} Orders${importReplaceExisting && importExisting.size > 0 ? ` (${importExisting.size} replaced)` : ''}`}
                       </button>
                     )}
                   </div>

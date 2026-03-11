@@ -5,6 +5,7 @@ import { supabase, Product, ProductPricing, ProductVariation, ProductSupplier, P
 import { uploadOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
 import EditableField from './EditableField';
+import { useSidebar } from '@/lib/sidebar-context';
 import {
   Plus,
   Trash2,
@@ -25,6 +26,8 @@ import {
   Copy,
   GripVertical,
   Star,
+  Menu,
+  FileText,
 } from 'lucide-react';
 
 const BRAND_ORANGE = '#d96f36';
@@ -63,9 +66,11 @@ interface ProductsDashboardProps {
 
 export default function ProductsDashboard({ isAdmin = false }: ProductsDashboardProps) {
   const { selectedStore } = useAuth();
+  const { setMobileOpen } = useSidebar();
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showDescription, setShowDescription] = useState(false);
   const [uploadingImage, setUploadingImage] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ productId: string; linkedOrderCount: number } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -83,6 +88,10 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
   // Detail modal
   const [selectedProduct, setSelectedProduct] = useState<ProductWithPricing | null>(null);
+  // Auto-show description when product has one, reset when switching products
+  useEffect(() => {
+    setShowDescription(!!selectedProduct?.description);
+  }, [selectedProduct?.id]);
   const [enlargedImage, setEnlargedImage] = useState<string | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [extractingPrices, setExtractingPrices] = useState(false);
@@ -1134,16 +1143,21 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
     <div className="min-h-screen bg-gray-50">
       {/* ── Header ─────────────────────────────────────────────── */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
-        <div className="px-4 py-4 pl-14 lg:pl-4">
-          <div className="flex items-center justify-center lg:justify-start">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: BRAND_ORANGE }}>
-                <Package className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Products Quotation</h1>
-                <p className="text-sm text-gray-600">{products.length} products</p>
-              </div>
+        <div className="px-4 py-4 lg:pl-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="lg:hidden p-2 rounded-lg text-gray-500 hover:bg-gray-100 flex-shrink-0"
+              title="Menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: BRAND_ORANGE }}>
+              <Package className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-xl font-bold text-gray-900">Products Quotation</h1>
+              <p className="text-sm text-gray-600">{products.length} products</p>
             </div>
           </div>
 
@@ -1916,12 +1930,39 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
 
               {/* ── SECTION: Product Info ── */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-4">
-                <EditableField
-                  value={selectedProduct.name || ''}
-                  onChange={(v) => handleUpdateProduct(selectedProduct.id, { name: String(v) })}
-                  placeholder="Product Name"
-                  className="!text-sm !font-semibold !text-gray-800 !border-transparent !px-1 !py-0.5 hover:!border-gray-300 focus:!border-[#d96f36]"
-                />
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <EditableField
+                      value={selectedProduct.name || ''}
+                      onChange={(v) => handleUpdateProduct(selectedProduct.id, { name: String(v) })}
+                      placeholder="Product Name"
+                      className="!text-sm !font-semibold !text-gray-800 !border-transparent !px-1 !py-0.5 hover:!border-gray-300 focus:!border-[#d96f36]"
+                    />
+                  </div>
+                  <button
+                    onClick={() => setShowDescription(!showDescription)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${
+                      showDescription || selectedProduct.description
+                        ? 'text-white'
+                        : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
+                    }`}
+                    style={showDescription || selectedProduct.description ? { backgroundColor: BRAND_ORANGE } : undefined}
+                    title="Product description"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span className="hidden sm:inline">Description</span>
+                  </button>
+                </div>
+
+                {showDescription && (
+                  <textarea
+                    value={selectedProduct.description || ''}
+                    onChange={(e) => handleUpdateProduct(selectedProduct.id, { description: e.target.value })}
+                    placeholder="Enter product description..."
+                    rows={4}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:ring-2 focus:ring-[#d96f36]/20 focus:border-[#d96f36] resize-y"
+                  />
+                )}
 
                 {/* Image + Status/Color/Size/Material */}
                 <div className="flex flex-col sm:flex-row gap-4 items-start">

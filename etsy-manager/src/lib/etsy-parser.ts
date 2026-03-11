@@ -7,6 +7,8 @@ export interface ParsedEtsyOrder {
   product_name: string;
   quantity: number;
   sold_for: number;
+  coupon_code?: string;
+  sale_percent?: number;
   ordered_date: string; // YYYY-MM-DD
   ship_by: string; // YYYY-MM-DD
   tracking_number?: string;
@@ -258,16 +260,32 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
     const orderLine = lines.find(l => l.startsWith('#'));
     if (!orderLine) continue;
 
-    const orderMatch = orderLine.match(/^#(\d+)\$([\d.]+)/);
+    const orderMatch = orderLine.match(/^#(\d+)\$([\d.]+)\s*(.*)?/);
     if (!orderMatch) continue;
 
     const etsy_order_no = orderMatch[1];
     const sold_for = parseFloat(orderMatch[2]);
 
+    // Extract coupon code and sale percent from trailing text like "40SALE", "35SALEOFF", "COMEBK"
+    let coupon_code: string | undefined;
+    let sale_percent: number | undefined;
+    const couponText = (orderMatch[3] || '').trim();
+    if (couponText) {
+      coupon_code = couponText;
+      // Try to extract a number from the coupon code (e.g., "40SALE" → 40, "35SALEOFF" → 35)
+      const saleMatch = couponText.match(/^(\d+)/);
+      if (saleMatch) {
+        sale_percent = parseInt(saleMatch[1]);
+      }
+    }
+
     // Extract ordered date
     const orderedLine = lines.find(l => l.startsWith('Ordered '));
     const ordered_date = orderedLine ? parseEtsyDate(orderedLine.replace('Ordered ', '')) : '';
-    const ship_by = ordered_date ? calculateShipBy(ordered_date) : '';
+
+    // Extract ship_by from "Ship by ..." line if present, otherwise calculate
+    const shipByLine = lines.find(l => l.match(/^Ship by\s+\w+\s+\d/));
+    const ship_by = shipByLine ? parseEtsyDate(shipByLine.replace('Ship by ', '')) : (ordered_date ? calculateShipBy(ordered_date) : '');
 
     // Extract tracking number
     const trackingLine = lines.find(l => l.startsWith('Track package'));
@@ -288,11 +306,24 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
         break;
       }
     }
-    // If no "Ships today"/"Shipped on" found, look for "No tracking" — address follows after "Ordered" line
+    // If no "Ships today"/"Shipped on" found, look for address after "Ordered" line
     if (addressStartIdx === -1) {
       const orderedIdx = lines.findIndex(l => l.startsWith('Ordered '));
       if (orderedIdx >= 0) {
-        addressStartIdx = orderedIdx + 1;
+        // Skip non-address lines after "Ordered" (e.g., "Standard Shipping($0.00)")
+        let startIdx = orderedIdx + 1;
+        while (startIdx < lines.length) {
+          const line = lines[startIdx];
+          if (line.startsWith('Standard Shipping') || line.startsWith('Free Shipping') ||
+              line.startsWith('Other Shipping') || line.startsWith('Expedited') ||
+              line.startsWith('Express') || line.match(/^\$[\d.]+/) ||
+              line.match(/^Shipping/)) {
+            startIdx++;
+          } else {
+            break;
+          }
+        }
+        addressStartIdx = startIdx;
       }
     }
 
@@ -307,7 +338,8 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
       const terminators = [
         'USPS Verified', 'VAT Collected', 'Marked as gift',
         'Order in reserve', 'Using shipping labels',
-        'Learn More', 'Select this order'
+        'Learn More', 'Select this order', 'Standard Shipping',
+        'Free Shipping', 'Other Shipping', 'Expedited', 'Express'
       ];
 
       for (let i = addressStartIdx + 1; i < lines.length; i++) {
@@ -378,14 +410,16 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
         continue;
       }
 
-      // Skip "Track package..." and "Ships today" etc
-      if (line.startsWith('Track package') || line.startsWith('Ships today') || line.startsWith('Shipped on')) {
+      // Skip "Track package...", "Ships today", "Ship by...", "Standard Shipping..." etc
+      if (line.startsWith('Track package') || line.startsWith('Ships today') || line.startsWith('Shipped on') ||
+          line.startsWith('Ship by') || line.startsWith('Standard Shipping') || line.startsWith('Free Shipping')) {
         i++;
         continue;
       }
 
-      // Check if this looks like a product title (not a Quantity/Style/Color/Size line)
-      if (line.startsWith('Quantity') || line.startsWith('Style') || line.startsWith('Color') || line.startsWith('Size')) {
+      // Check if this looks like a product title (not a Quantity/Style/Color/Size/Choose line)
+      if (line.startsWith('Quantity') || line.startsWith('Style') || line.startsWith('Color') ||
+          line.startsWith('Size') || line.startsWith('Choose')) {
         i++;
         continue;
       }
@@ -409,9 +443,27 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
       while (i < productSection.length) {
         const attrLine = productSection[i];
 
+        // Skip "Ship by..." and "Standard Shipping..." lines in attribute section
+        if (attrLine.startsWith('Ship by') || attrLine.startsWith('Standard Shipping') || attrLine.startsWith('Free Shipping')) {
+          i++;
+          continue;
+        }
+
         if (attrLine.startsWith('Quantity')) {
           const qMatch = attrLine.match(/Quantity(\d+)/);
           if (qMatch) quantity = parseInt(qMatch[1]);
+          i++;
+        } else if (attrLine.startsWith('Choose')) {
+          // Etsy "Choose X" variations: "Choose SetBlue Ceramic Teapot", "Choose SetTeapot + 6 Cups"
+          // Format: "Choose" + option_label + value (concatenated without space)
+          // Remove "Choose " and the option label (first word after Choose)
+          let chooseVal = attrLine.replace(/^Choose\s*/, '');
+          // Remove the option label (e.g., "Set", "Color", "Style") - it's the first CamelCase word
+          const labelMatch = chooseVal.match(/^([A-Z][a-z]*)(.+)$/);
+          if (labelMatch) {
+            chooseVal = labelMatch[2].trim();
+          }
+          style = chooseVal;
           i++;
         } else if (attrLine.startsWith('Style')) {
           // Etsy concatenates option group label with selected value:
@@ -477,6 +529,8 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
         quantity: product.quantity,
         // For multi-item orders: total goes on first item, rest get 0 (user can adjust)
         sold_for: pi === 0 ? sold_for : 0,
+        coupon_code: pi === 0 ? coupon_code : undefined,
+        sale_percent: pi === 0 ? sale_percent : undefined,
         ordered_date,
         ship_by,
         tracking_number,

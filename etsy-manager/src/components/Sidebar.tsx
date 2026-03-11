@@ -56,20 +56,12 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Mobile hamburger button */}
-      {!mobileOpen && (
-        <button
-          className="fixed top-3 left-3 z-50 lg:hidden p-2 bg-white rounded-lg shadow-md border border-gray-200"
-          onClick={() => setMobileOpen(true)}
-        >
-          <Menu className="w-5 h-5 text-gray-700" />
-        </button>
-      )}
+      {/* Mobile hamburger button - hidden; each page header has its own */}
 
       {/* Mobile backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          className="fixed inset-0 bg-black/50 z-[60] lg:hidden"
           onClick={() => setMobileOpen(false)}
         />
       )}
@@ -77,7 +69,7 @@ export default function Sidebar() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed left-0 top-0 h-screen bg-gray-900 text-white flex flex-col z-40
+          fixed left-0 top-0 h-screen bg-gray-900 text-white flex flex-col z-[70]
           transition-all duration-300 ease-in-out
           ${collapsed ? 'lg:w-[68px]' : 'lg:w-64'} w-64
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
