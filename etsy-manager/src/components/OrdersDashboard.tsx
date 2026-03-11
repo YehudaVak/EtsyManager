@@ -473,17 +473,23 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       return;
     }
     try {
-      const response = await fetch(order.image_url);
+      // Fetch via proxy to avoid CORS issues
+      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(order.image_url)}`;
+      const response = await fetch(proxyUrl);
       const blob = await response.blob();
-      const pngBlob = blob.type === 'image/png' ? blob : await new Promise<Blob>((resolve) => {
+
+      // Convert to PNG using canvas
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
         const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
         img.onload = () => {
           const canvas = document.createElement('canvas');
           canvas.width = img.naturalWidth;
           canvas.height = img.naturalHeight;
           canvas.getContext('2d')!.drawImage(img, 0, 0);
-          canvas.toBlob((b) => resolve(b!), 'image/png');
+          canvas.toBlob((b) => b ? resolve(b) : reject(new Error('Canvas toBlob failed')), 'image/png');
         };
+        img.onerror = () => reject(new Error('Image load failed'));
         img.src = URL.createObjectURL(blob);
       });
 
@@ -494,12 +500,12 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
           setCopyToast('Image copied!');
           setTimeout(() => setCopyToast(null), 2000);
           return;
-        } catch {
-          // Clipboard write failed (mobile) — fall through to share/download
+        } catch (e) {
+          console.log('[copyImage] Clipboard write failed, trying share:', e);
         }
       }
 
-      // Mobile fallback: use Web Share API if available (allows sharing to WhatsApp directly)
+      // Mobile fallback: use Web Share API
       if (navigator.share) {
         const file = new File([pngBlob], 'product.png', { type: 'image/png' });
         if (navigator.canShare?.({ files: [file] })) {
@@ -510,7 +516,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         }
       }
 
-      // Final fallback: download the image
+      // Final fallback: download
       const url = URL.createObjectURL(pngBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -518,7 +524,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       a.click();
       URL.revokeObjectURL(url);
       setCopyToast('Image downloaded!');
-    } catch {
+    } catch (e) {
+      console.error('[copyImage] Error:', e);
       setCopyToast('Failed to copy image');
     }
     setTimeout(() => setCopyToast(null), 2000);
@@ -2572,13 +2579,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       {selectedOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); setSelectedOrder(null); } }}>
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
             <div className="sticky top-0 z-10 px-6 py-4 border-b flex items-center justify-between" style={{ backgroundColor: BRAND_ORANGE }}>
               <h2 className="text-xl font-bold text-white">
-                {selectedOrder.customer_name || 'New Order'} {selectedOrder.etsy_order_no && `#${selectedOrder.etsy_order_no}`}
+                {selectedOrder.customer_name || 'New Order'}
               </h2>
               <button
                 onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
@@ -2591,8 +2598,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             {/* Modal Content */}
             <div className="p-6 space-y-6">
               {/* Top Row: Order Date + Ship By + Etsy Order # */}
-              <div className="flex items-end gap-4">
-                <div className="w-32">
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="w-32 min-w-[8rem]">
                   <label className="block text-xs font-medium text-gray-500 mb-1">Order Date</label>
                   <EditableField
                     type="date"
@@ -2600,7 +2607,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ordered_date', v)}
                   />
                 </div>
-                <div className="w-32">
+                <div className="w-32 min-w-[8rem]">
                   <label className="block text-xs font-medium text-gray-500 mb-1">Ship By</label>
                   <EditableField
                     type="date"
@@ -2608,7 +2615,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     onChange={(v) => handleFieldUpdate(selectedOrder.id, 'ship_by', v)}
                   />
                 </div>
-                <div className="w-40">
+                <div className="w-40 min-w-[10rem]">
                   <label className="block text-xs font-medium text-gray-500 mb-1">Etsy Order #</label>
                   <EditableField
                     value={selectedOrder.etsy_order_no || ''}
@@ -3143,7 +3150,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             </div>
 
             {/* Modal Footer */}
-            <div className={`sticky bottom-0 px-6 py-4 border-t bg-gray-50 flex ${isAdmin ? 'justify-between' : 'justify-end'} items-center gap-2`}>
+            <div className={`sticky bottom-0 px-4 sm:px-6 py-3 sm:py-4 border-t bg-gray-50 flex flex-wrap ${isAdmin ? 'justify-between' : 'justify-end'} items-center gap-2`}>
               {isAdmin && (
                 <button
                   onMouseDown={(e) => {
@@ -3151,13 +3158,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     setSelectedOrder(null);
                     openDeleteConfirm(selectedOrder);
                   }}
-                  className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors flex items-center gap-2"
+                  className="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors flex items-center gap-1.5 text-sm"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Delete Order
+                  Delete
                 </button>
               )}
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {isAdmin && (
                   <>
                     <button
@@ -3165,28 +3172,28 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         e.preventDefault();
                         handleCopyImage(selectedOrder);
                       }}
-                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-1.5 text-sm"
                       title="Copy product image to clipboard"
                     >
                       <Image className="w-4 h-4" />
-                      Copy Image
+                      Image
                     </button>
                     <button
                       onMouseDown={(e) => {
                         e.preventDefault();
                         handleCopyText(selectedOrder);
                       }}
-                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                      className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-1.5 text-sm"
                       title="Copy order details to clipboard"
                     >
                       <ClipboardCopy className="w-4 h-4" />
-                      Copy Text
+                      Text
                     </button>
                   </>
                 )}
                 <button
                   onMouseDown={(e) => { e.preventDefault(); setSelectedOrder(null); }}
-                  className="px-6 py-2 text-white rounded-lg font-medium transition-colors"
+                  className="px-5 py-2 text-white rounded-lg font-medium transition-colors text-sm"
                   style={{ backgroundColor: BRAND_ORANGE }}
                 >
                   Done

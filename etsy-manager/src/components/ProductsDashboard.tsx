@@ -334,17 +334,20 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
   const handleCopyProductImage = async (product: ProductWithPricing) => {
     if (!product.image_url) { showToast('No image available'); return; }
     try {
-      const response = await fetch(product.image_url);
+      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(product.image_url)}`;
+      const response = await fetch(proxyUrl);
       const blob = await response.blob();
-      const pngBlob = blob.type === 'image/png' ? blob : await new Promise<Blob>((resolve) => {
+      const pngBlob = await new Promise<Blob>((resolve, reject) => {
         const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
         img.onload = () => {
           const canvas = document.createElement('canvas');
           canvas.width = img.naturalWidth;
           canvas.height = img.naturalHeight;
           canvas.getContext('2d')!.drawImage(img, 0, 0);
-          canvas.toBlob((b) => resolve(b!), 'image/png');
+          canvas.toBlob((b) => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png');
         };
+        img.onerror = () => reject(new Error('Image load failed'));
         img.src = URL.createObjectURL(blob);
       });
       // Try clipboard API first (desktop)
