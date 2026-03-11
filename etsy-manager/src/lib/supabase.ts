@@ -200,6 +200,9 @@ export interface Product {
   is_out_of_stock?: boolean;
   is_starred?: boolean;
 
+  // Local folders
+  edited_images_folder?: string;
+
   // Notes
   notes?: string;
 

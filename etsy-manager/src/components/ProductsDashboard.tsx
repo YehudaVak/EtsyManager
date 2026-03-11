@@ -28,6 +28,7 @@ import {
   Star,
   Menu,
   FileText,
+  FolderOpen,
 } from 'lucide-react';
 
 const BRAND_ORANGE = '#d96f36';
@@ -2409,6 +2410,49 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
                       Listing ID: {selectedProduct.etsy_listing_id}
                     </span>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-600 mb-1">Edited Images Folder</label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <EditableField
+                        value={selectedProduct.edited_images_folder || ''}
+                        onChange={(v) => handleUpdateProduct(selectedProduct.id, { edited_images_folder: String(v) })}
+                        placeholder={'C:\\Photos\\ProductName\\...'}
+                      />
+                    </div>
+                    {selectedProduct.edited_images_folder && (
+                      <button
+                        onClick={async () => {
+                          const folderPath = selectedProduct.edited_images_folder!;
+                          try {
+                            const res = await fetch('/api/open-folder', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ path: folderPath }),
+                            });
+                            if (res.ok) {
+                              setCopyToast('Folder opened!');
+                            } else {
+                              // Fallback: copy path
+                              await navigator.clipboard.writeText(folderPath);
+                              setCopyToast('Path copied to clipboard');
+                            }
+                          } catch {
+                            await navigator.clipboard.writeText(folderPath);
+                            setCopyToast('Path copied to clipboard');
+                          }
+                          setTimeout(() => setCopyToast(null), 2000);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-white bg-violet-500 hover:bg-violet-600"
+                        title="Open folder / Copy path"
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                        Open
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
