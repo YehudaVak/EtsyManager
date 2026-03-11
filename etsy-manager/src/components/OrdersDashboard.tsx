@@ -486,8 +486,38 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         };
         img.src = URL.createObjectURL(blob);
       });
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
-      setCopyToast('Image copied!');
+
+      // Try clipboard API first (works on desktop)
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+          setCopyToast('Image copied!');
+          setTimeout(() => setCopyToast(null), 2000);
+          return;
+        } catch {
+          // Clipboard write failed (mobile) — fall through to share/download
+        }
+      }
+
+      // Mobile fallback: use Web Share API if available (allows sharing to WhatsApp directly)
+      if (navigator.share) {
+        const file = new File([pngBlob], 'product.png', { type: 'image/png' });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          setCopyToast('Image shared!');
+          setTimeout(() => setCopyToast(null), 2000);
+          return;
+        }
+      }
+
+      // Final fallback: download the image
+      const url = URL.createObjectURL(pngBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `order-${order.etsy_order_no || 'image'}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setCopyToast('Image downloaded!');
     } catch {
       setCopyToast('Failed to copy image');
     }

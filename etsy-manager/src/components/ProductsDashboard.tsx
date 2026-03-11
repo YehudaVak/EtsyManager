@@ -347,8 +347,31 @@ export default function ProductsDashboard({ isAdmin = false }: ProductsDashboard
         };
         img.src = URL.createObjectURL(blob);
       });
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
-      showToast('Image copied!');
+      // Try clipboard API first (desktop)
+      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+          showToast('Image copied!');
+          return;
+        } catch { /* fall through */ }
+      }
+      // Mobile: use Web Share API
+      if (navigator.share) {
+        const file = new File([pngBlob], 'product.png', { type: 'image/png' });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          showToast('Image shared!');
+          return;
+        }
+      }
+      // Fallback: download
+      const url = URL.createObjectURL(pngBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `product-${product.name?.slice(0, 20) || 'image'}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Image downloaded!');
     } catch {
       showToast('Failed to copy image');
     }
