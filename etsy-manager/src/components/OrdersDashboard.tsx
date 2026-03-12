@@ -1760,6 +1760,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                           <td className="px-2 py-3 text-center border-r border-gray-100">
                             <div className="flex flex-col items-center gap-1">
                               {isNewOrder(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>}
+                              {order.sent_to_supplier && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                               {isOutOfStock(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>}
                               {needsTracking(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">TRACK</span>}
                               {order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">PAID</span>}
@@ -1926,6 +1927,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <td className="px-2 py-2 text-center border-r border-gray-100">
                               <div className="flex flex-col items-center gap-1">
                                 {isNewOrder(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">NEW</span>}
+                                {order.sent_to_supplier && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                                 {isOutOfStock(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">OUT</span>}
                                 {needsTracking(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700">TRACK</span>}
                                 {order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">PAID</span>}
@@ -2042,6 +2044,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     )}
                     {!isGroupChild && order.etsy_order_no && <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>}
                     {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
+                    {order.sent_to_supplier && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-cyan-100 text-cyan-700">SENT</span>}
                     {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
                     {needsTracking(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>}
                     {order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>}
@@ -2412,6 +2415,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     <h3 className="font-medium mb-3" style={{ color: '#b35a2b' }}>Status</h3>
                     <div className={`grid gap-3 ${isAdmin ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-4'}`}>
                       {[
+                        { key: 'sent_to_supplier', label: 'Sent to Supplier', adminOnly: false },
                         { key: 'first_message_sent', label: '1st Message', adminOnly: true },
                         { key: 'is_paid', label: 'Paid', adminOnly: false },
                         { key: 'tracking_added', label: 'Tracking Added', adminOnly: true },
@@ -3021,6 +3025,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 <h3 className="font-semibold mb-3" style={{ color: BRAND_ORANGE }}>Order Status</h3>
                 <div className="grid grid-cols-4 gap-4">
                   {[
+                    { key: 'sent_to_supplier', label: 'Sent to Supplier' },
                     { key: 'is_paid', label: 'Paid' },
                     { key: 'is_shipped', label: 'Shipped' },
                     { key: 'is_delivered', label: 'Delivered' },
