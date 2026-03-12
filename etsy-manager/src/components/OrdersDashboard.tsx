@@ -6,7 +6,7 @@ import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supab
 import { parseEtsyOrders, ParsedEtsyOrder } from '@/lib/etsy-parser';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu } from 'lucide-react';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu, Ban } from 'lucide-react';
 import { useSidebar } from '@/lib/sidebar-context';
 import EditableField from './EditableField';
 
@@ -94,7 +94,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 
   // Filter state for supplier status tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'issue'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'cancelled' | 'issue'>('all');
 
   // WhatsApp copy toast
   const [copyToast, setCopyToast] = useState<string | null>(null);
@@ -473,6 +473,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       return;
     }
     try {
+      const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
       // Fetch via proxy to avoid CORS issues
       const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(order.image_url)}`;
       const response = await fetch(proxyUrl);
@@ -493,37 +495,41 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         img.src = URL.createObjectURL(blob);
       });
 
-      // Try clipboard API first (works on desktop)
-      if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+      if (isMobile) {
+        // Mobile: download the image directly
+        const url = URL.createObjectURL(pngBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `order-${order.etsy_order_no || 'image'}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setCopyToast('Image downloaded!');
+      } else {
+        // Desktop: try clipboard, fall back to download
+        let copied = false;
         try {
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
-          setCopyToast('Image copied!');
-          setTimeout(() => setCopyToast(null), 2000);
-          return;
-        } catch (e) {
-          console.log('[copyImage] Clipboard write failed, trying share:', e);
+          if (typeof ClipboardItem !== 'undefined') {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+            setCopyToast('Image copied!');
+            copied = true;
+          }
+        } catch (clipErr) {
+          console.log('[copyImage] Clipboard failed:', clipErr);
+        }
+        if (!copied) {
+          const url = URL.createObjectURL(pngBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `order-${order.etsy_order_no || 'image'}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setCopyToast('Image downloaded (clipboard needs HTTPS)');
         }
       }
-
-      // Mobile fallback: use Web Share API
-      if (navigator.share) {
-        const file = new File([pngBlob], 'product.png', { type: 'image/png' });
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ files: [file] });
-          setCopyToast('Image shared!');
-          setTimeout(() => setCopyToast(null), 2000);
-          return;
-        }
-      }
-
-      // Final fallback: download
-      const url = URL.createObjectURL(pngBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `order-${order.etsy_order_no || 'image'}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setCopyToast('Image downloaded!');
     } catch (e) {
       console.error('[copyImage] Error:', e);
       setCopyToast('Failed to copy image');
@@ -544,6 +550,14 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const handleFieldUpdate = async (orderId: string, field: keyof Order, value: any) => {
     try {
       let updates: Partial<Order> = { [field]: value };
+
+      // Auto-mark as paid when tracking number is added
+      if (field === 'tracking_number' && value && typeof value === 'string' && value.trim()) {
+        const order = orders.find(o => o.id === orderId);
+        if (order && !order.is_paid) {
+          updates.is_paid = true;
+        }
+      }
 
       if (field === 'sold_for' || field === 'fees_percent' || field === 'product_cost') {
         const order = orders.find(o => o.id === orderId);
@@ -579,12 +593,20 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const pendingUpdates = useRef<{ [key: string]: ReturnType<typeof setTimeout> }>({});
 
   const handleDebouncedFieldUpdate = useCallback((orderId: string, field: keyof Order, value: any) => {
+    // Auto-mark as paid when tracking number is added
+    const autoPaid = field === 'tracking_number' && value && typeof value === 'string' && value.trim();
+    const localUpdates: Partial<Order> = { [field]: value };
+    if (autoPaid) {
+      const order = orders.find(o => o.id === orderId);
+      if (order && !order.is_paid) localUpdates.is_paid = true;
+    }
+
     // Update local state immediately (no lag)
     setOrders(prev => prev.map(order =>
-      order.id === orderId ? { ...order, [field]: value } : order
+      order.id === orderId ? { ...order, ...localUpdates } : order
     ));
     if (selectedOrder && selectedOrder.id === orderId) {
-      setSelectedOrder(prev => prev ? { ...prev, [field]: value } : prev);
+      setSelectedOrder(prev => prev ? { ...prev, ...localUpdates } : prev);
     }
 
     // Debounce the DB call
@@ -594,7 +616,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     }
     pendingUpdates.current[key] = setTimeout(async () => {
       try {
-        let updates: Partial<Order> = { [field]: value };
+        let updates: Partial<Order> = { ...localUpdates };
 
         if (field === 'sold_for' || field === 'fees_percent' || field === 'product_cost') {
           const order = orders.find(o => o.id === orderId);
@@ -975,6 +997,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     shipped: orders.filter(order => order.is_shipped).length,
     delivered: orders.filter(order => order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
+    cancelled: orders.filter(order => !!order.is_cancelled).length,
     issue: orders.filter(order => !!order.issue).length,
   };
 
@@ -987,6 +1010,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'shipped' && !order.is_shipped) return false;
       if (statusFilter === 'delivered' && !order.is_delivered) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
+      if (statusFilter === 'cancelled' && !order.is_cancelled) return false;
       if (statusFilter === 'issue' && !order.issue) return false;
 
       // Then apply search filter
@@ -1383,6 +1407,22 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             {statusCounts.out_of_stock > 0 && (
               <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'out_of_stock' ? 'bg-red-600' : 'bg-red-100 text-red-700'}`}>
                 {statusCounts.out_of_stock}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('cancelled')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'cancelled'
+                ? 'bg-gray-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
+            }`}
+          >
+            <Ban className="w-4 h-4" />
+            Cancelled
+            {statusCounts.cancelled > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'cancelled' ? 'bg-gray-600' : 'bg-gray-200 text-gray-700'}`}>
+                {statusCounts.cancelled}
               </span>
             )}
           </button>
@@ -2380,6 +2420,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                         { key: 'is_completed_on_etsy', label: 'Etsy Complete', adminOnly: false },
                         { key: 'is_delivered', label: 'Delivered', adminOnly: false },
                         { key: 'review_message_sent', label: 'Review Message', adminOnly: true },
+                        { key: 'is_cancelled', label: 'Cancelled', adminOnly: false },
                       ]
                         .filter(item => isAdmin || !item.adminOnly)
                         .map(({ key, label }) => (
@@ -2984,6 +3025,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     { key: 'is_shipped', label: 'Shipped' },
                     { key: 'is_delivered', label: 'Delivered' },
                     { key: 'is_completed_on_etsy', label: 'Completed on Etsy' },
+                    { key: 'is_cancelled', label: 'Cancelled' },
                     ...(isAdmin ? [
                       { key: 'first_message_sent', label: 'First Message Sent' },
                       { key: 'tracking_added', label: 'Tracking Added' },
@@ -3107,8 +3149,28 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
               {/* Issues Section (Admin Only) */}
               {isAdmin && (
-                <div className="bg-red-50 rounded-xl p-4">
-                  <h3 className="font-semibold text-red-800 mb-3">Issues & Solutions</h3>
+                <div className={`rounded-xl p-4 border-2 ${selectedOrder.issue ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className={`font-semibold ${selectedOrder.issue ? 'text-red-800' : 'text-gray-700'}`}>Issues & Solutions</h3>
+                    {selectedOrder.issue ? (
+                      <button
+                        onClick={() => {
+                          handleFieldUpdate(selectedOrder.id, 'issue', '');
+                          handleFieldUpdate(selectedOrder.id, 'the_solution', '');
+                        }}
+                        className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Resolve Issue
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleFieldUpdate(selectedOrder.id, 'issue', 'Action needed')}
+                        className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Flag Issue
+                      </button>
+                    )}
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Issue</label>
@@ -3168,10 +3230,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                 {isAdmin && (
                   <>
                     <button
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleCopyImage(selectedOrder);
-                      }}
+                      onClick={() => handleCopyImage(selectedOrder)}
                       className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors flex items-center gap-1.5 text-sm"
                       title="Copy product image to clipboard"
                     >

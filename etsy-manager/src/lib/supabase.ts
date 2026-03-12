@@ -96,6 +96,7 @@ export interface Order {
   // Supplier Status
   supplier_acknowledged?: boolean;
   is_out_of_stock?: boolean;
+  is_cancelled?: boolean;
 
   // Supplier Info
   order_from?: string;
