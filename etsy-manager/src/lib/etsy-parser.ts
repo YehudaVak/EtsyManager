@@ -233,7 +233,198 @@ function formatAddress(name: string, lines: string[], phone?: string): string {
   return parts.join('\n');
 }
 
+// Parse Etsy email notification format
+function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
+  const orders: ParsedEtsyOrder[] = [];
+
+  // Split by individual order emails
+  const emailBlocks = rawText.split(/Congratulations on your Etsy sale/).filter(b => b.includes('order number is'));
+
+  for (const block of emailBlocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+    // Extract order number
+    const orderNoLine = lines.find(l => l.includes('order number is:'));
+    if (!orderNoLine) continue;
+    const orderNoMatch = orderNoLine.match(/order number is:\s*(\d+)/);
+    if (!orderNoMatch) continue;
+    const etsy_order_no = orderNoMatch[1];
+
+    // Extract date from "Paid via Etsy Payments on Mar 12, 2026"
+    const paidLine = lines.find(l => l.includes('Paid via Etsy Payments on'));
+    const ordered_date = paidLine ? parseEtsyDate(paidLine.replace(/.*Paid via Etsy Payments on\s*/, '')) : '';
+    const ship_by = ordered_date ? calculateShipBy(ordered_date) : '';
+
+    // Extract shipping address
+    const addrIdx = lines.findIndex(l => l === 'Shipping address');
+    let customer_name = '';
+    let addressRawLines: string[] = [];
+
+    if (addrIdx >= 0) {
+      // Name is next non-empty line after "Shipping address"
+      customer_name = lines[addrIdx + 1] || '';
+
+      // Collect address lines until we hit a terminator
+      const addrTerminators = [
+        'Shipping internationally', 'Double check', 'VAT collected',
+        'We\'re applying', 'Sell with confidence', 'bell icon',
+        'Choose a DDP', 'Learn more', 'Using shipping labels',
+      ];
+
+      for (let i = addrIdx + 2; i < lines.length; i++) {
+        const line = lines[i];
+        if (addrTerminators.some(t => line.startsWith(t))) break;
+        addressRawLines.push(line);
+      }
+    }
+
+    const address = formatAddress(customer_name, addressRawLines);
+
+    // Extract VAT info
+    let has_vat = false;
+    let vat_number: string | undefined;
+    let vat_amount: string | undefined;
+
+    const vatIdx = lines.findIndex(l => l === 'VAT collected');
+    if (vatIdx >= 0) {
+      has_vat = true;
+      for (let i = vatIdx + 1; i < Math.min(vatIdx + 8, lines.length); i++) {
+        const vatMatch = lines[i].match(/VAT number,?\s*([\d\s]+)/);
+        if (vatMatch) vat_number = vatMatch[1].trim();
+        const amountMatch = lines[i].match(/[£€]([\d.]+)/);
+        if (amountMatch) vat_amount = amountMatch[0];
+      }
+    }
+
+    // Extract product details - find product block(s)
+    // Product name is a long line before "Shop: TerraLoomz"
+    const productBlocks: Array<{
+      name: string;
+      quantity: number;
+      price: number;
+      color?: string;
+      size?: string;
+      style?: string;
+    }> = [];
+
+    // Find all "Transaction ID:" lines to locate each product
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith('Transaction ID:')) continue;
+
+      // Search backwards for the product name (long descriptive line before variation/Shop lines)
+      let productName = '';
+      let color: string | undefined;
+      let size: string | undefined;
+      let style: string | undefined;
+
+      for (let j = i - 1; j >= Math.max(0, i - 6); j--) {
+        const line = lines[j];
+        if (line.startsWith('Color:')) {
+          color = line.replace('Color:', '').trim();
+        } else if (line.startsWith('Size:')) {
+          size = line.replace('Size:', '').trim();
+        } else if (line.startsWith('Style:')) {
+          style = line.replace('Style:', '').trim();
+        } else if (line.startsWith('Choose')) {
+          // "Choose Set: Blue Ceramic Teapot"
+          const chooseMatch = line.match(/^Choose\s+\w+:\s*(.+)$/);
+          if (chooseMatch) style = chooseMatch[1].trim();
+        } else if (line.startsWith('Shop:')) {
+          continue;
+        } else if (line.length > 30 && !line.startsWith('Processing') && !line.startsWith('Returns')) {
+          // This is likely the product name
+          productName = line;
+          break;
+        }
+      }
+
+      if (!productName) continue;
+
+      // Search forward for Quantity and Price
+      let quantity = 1;
+      let price = 0;
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+        const qMatch = lines[j].match(/^Quantity:\s*(\d+)/);
+        if (qMatch) quantity = parseInt(qMatch[1]);
+        const pMatch = lines[j].match(/^Price:\s*\$([\d.]+)/);
+        if (pMatch) price = parseFloat(pMatch[1]);
+      }
+
+      productBlocks.push({ name: productName, quantity, price, color, size, style });
+    }
+
+    if (productBlocks.length === 0) continue;
+
+    // Extract order total (sold_for)
+    let sold_for = 0;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const totalMatch = lines[i].match(/^\$([\d.]+)$/);
+      if (totalMatch && i > 0 && lines[i - 1].includes('Order total')) {
+        sold_for = parseFloat(totalMatch[1]);
+        break;
+      }
+    }
+    // Fallback: look for "Order total:" on same line
+    if (!sold_for) {
+      const totalLine = lines.find(l => l.startsWith('Order total:'));
+      if (totalLine) {
+        const m = totalLine.match(/\$([\d.]+)/);
+        if (m) sold_for = parseFloat(m[1]);
+      }
+    }
+
+    // Extract coupon code
+    let coupon_code: string | undefined;
+    let sale_percent: number | undefined;
+    const discountLine = lines.find(l => l.includes('buyer applied these discounts:'));
+    if (discountLine) {
+      const dMatch = discountLine.match(/discounts:\s*(.+)$/);
+      if (dMatch) {
+        coupon_code = dMatch[1].trim();
+        const saleMatch = coupon_code.match(/(\d+)/);
+        if (saleMatch) sale_percent = parseInt(saleMatch[1]);
+      }
+    }
+
+    // Create order entries
+    for (let pi = 0; pi < productBlocks.length; pi++) {
+      const product = productBlocks[pi];
+      let product_name = product.name;
+      const variation = product.style || product.color || product.size;
+      if (variation) {
+        product_name = `${product.name} – ${variation}`;
+      }
+
+      orders.push({
+        etsy_order_no,
+        customer_name,
+        address,
+        product_name,
+        quantity: product.quantity,
+        sold_for: pi === 0 ? sold_for : 0,
+        coupon_code: pi === 0 ? coupon_code : undefined,
+        sale_percent: pi === 0 ? sale_percent : undefined,
+        ordered_date,
+        ship_by,
+        color: product.color,
+        size: product.size,
+        style: product.style,
+        has_vat,
+        vat_number,
+        vat_amount,
+      });
+    }
+  }
+
+  return orders;
+}
+
 export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
+  // Auto-detect email format
+  if (rawText.includes('Congratulations on your Etsy sale') || rawText.includes('Your order number is:')) {
+    return parseEtsyEmailOrders(rawText);
+  }
+
   const orders: ParsedEtsyOrder[] = [];
 
   // Split by order blocks - each starts with "Select this order from"

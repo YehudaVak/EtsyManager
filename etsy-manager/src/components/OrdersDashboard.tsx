@@ -37,17 +37,18 @@ function matchProductByName(baseName: string, products: { id: string; name: stri
     if (match) return match;
   }
 
-  // 4. Fuzzy word-overlap: if >70% of significant words match, consider it the same product
-  const baseWords = lowerBase.split(/[\s|,]+/).filter(w => w.length > 2);
+  // 4. Fuzzy word-overlap: if >70% of the shorter name's words appear in the longer one, it's a match
+  const baseWords = lowerBase.split(/[\s|,\-–]+/).filter(w => w.length > 2);
   if (baseWords.length >= 3) {
     let bestMatch: typeof products[0] | null = null;
     let bestScore = 0;
     for (const p of products) {
       if (!p.name) continue;
-      const prodWords = p.name.toLowerCase().split(/[\s|,]+/).filter(w => w.length > 2);
+      const prodWords = p.name.toLowerCase().split(/[\s|,\-–]+/).filter(w => w.length > 2);
       if (prodWords.length < 3) continue;
-      const commonWords = baseWords.filter(w => prodWords.includes(w));
-      const score = commonWords.length / Math.max(baseWords.length, prodWords.length);
+      const commonWords = new Set(baseWords.filter(w => prodWords.includes(w)));
+      // Score based on how well the shorter name is covered by the longer one
+      const score = commonWords.size / Math.min(baseWords.length, prodWords.length);
       if (score > bestScore) {
         bestScore = score;
         bestMatch = p;
@@ -110,7 +111,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [importLoading, setImportLoading] = useState(false);
   const [importResults, setImportResults] = useState<{ added: number; updated: number; skipped: number } | null>(null);
   const [importExisting, setImportExisting] = useState<Set<string>>(new Set()); // order numbers already in DB
-  const [importMatched, setImportMatched] = useState<Map<string, { image_url?: string; supplier_name?: string }>>(new Map()); // product matches by order index
+  const [importMatched, setImportMatched] = useState<Map<string, { image_url?: string; supplier_name?: string; matched_product_name?: string; matched_variation_name?: string }>>(new Map()); // product matches by order index
   const [importReplaceExisting, setImportReplaceExisting] = useState(false); // replace existing orders option
 
   // Products for selector
@@ -687,21 +688,30 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     const { data: previewVariations } = prodIds.length > 0
       ? await supabase.from('product_variations').select('id, product_id, name, image_url').in('product_id', prodIds)
       : { data: [] as any[] };
-    const matchMap = new Map<string, { image_url?: string; supplier_name?: string }>();
+    const matchMap = new Map<string, { image_url?: string; supplier_name?: string; matched_product_name?: string; matched_variation_name?: string }>();
     parsed.forEach((p, idx) => {
       const baseName = p.product_name?.split(' – ')[0]?.trim() || '';
       const matched = matchProductByName(baseName, allProducts || []);
       if (matched) {
         let imgUrl = matched.image_url || undefined;
+        let matchedVariationName: string | undefined;
         // Check for variation-specific image
         const variationName = p.product_name?.split(' – ')[1]?.trim();
         if (variationName) {
           const pVars = (previewVariations || []).filter(v => v.product_id === matched.id);
           const matchedVar = pVars.find(v => v.name === variationName) ||
                              pVars.find(v => v.name?.toLowerCase() === variationName.toLowerCase());
-          if (matchedVar?.image_url) imgUrl = matchedVar.image_url;
+          if (matchedVar) {
+            matchedVariationName = matchedVar.name;
+            if (matchedVar.image_url) imgUrl = matchedVar.image_url;
+          }
         }
-        matchMap.set(`${idx}`, { image_url: imgUrl, supplier_name: matched.supplier_name || undefined });
+        matchMap.set(`${idx}`, {
+          image_url: imgUrl,
+          supplier_name: matched.supplier_name || undefined,
+          matched_product_name: matched.name || undefined,
+          matched_variation_name: matchedVariationName,
+        });
       }
     });
     setImportMatched(matchMap);
@@ -1762,8 +1772,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               {isNewOrder(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>}
                               {order.sent_to_supplier && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                               {isOutOfStock(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>}
-                              {needsTracking(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">TRACK</span>}
-                              {order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">PAID</span>}
+                                                            {order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">PAID</span>}
                               {order.is_shipped && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
                               {order.is_delivered && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">DELIVERED</span>}
                             </div>
@@ -1929,8 +1938,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                                 {isNewOrder(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">NEW</span>}
                                 {order.sent_to_supplier && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                                 {isOutOfStock(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">OUT</span>}
-                                {needsTracking(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-blue-100 text-blue-700">TRACK</span>}
-                                {order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">PAID</span>}
+                                                                {order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">PAID</span>}
                                 {order.is_shipped && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
                                 {order.is_delivered && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-teal-100 text-teal-700">DELIVERED</span>}
                               </div>
@@ -2046,8 +2054,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
                     {order.sent_to_supplier && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-cyan-100 text-cyan-700">SENT</span>}
                     {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
-                    {needsTracking(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700">TRACK</span>}
-                    {order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>}
+                                        {order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>}
                     {order.is_shipped && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-700">SHIPPED</span>}
                     {order.is_delivered && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-teal-100 text-teal-700">DELIVERED</span>}
                   </div>
@@ -3375,7 +3382,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               {order.sale_percent ? <span className="ml-1 text-xs font-normal text-red-500">({order.sale_percent}% off)</span> : ''}
                             </span>
                           </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                          <div className="flex gap-3">
+                            {match?.image_url && (
+                              <div className="flex-shrink-0">
+                                <img src={match.image_url} alt="" className="w-16 h-16 rounded-lg object-cover border border-gray-200" />
+                              </div>
+                            )}
+                          <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
                             <div><span className="text-gray-500">Product:</span> <span className="font-medium">{order.product_name?.split(' – ')[0]?.slice(0, 50)}</span></div>
                             {variation && <div><span className="text-gray-500">Variation:</span> <span className="font-medium">{variation}</span></div>}
                             <div><span className="text-gray-500">Customer:</span> {order.customer_name}</div>
@@ -3386,6 +3399,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             {order.has_vat && <div><span className="text-gray-500">VAT:</span> Yes{order.vat_amount ? ` (${order.vat_amount})` : ''}</div>}
                             {order.is_gift && <div><span className="text-gray-500">Gift:</span> Yes</div>}
                             {match?.supplier_name && <div><span className="text-gray-500">Supplier:</span> <span className="text-blue-600">{match.supplier_name}</span></div>}
+                            {match?.matched_product_name && (
+                              <div className="sm:col-span-2"><span className="text-gray-500">Catalog Match:</span> <span className="text-blue-700 font-medium">{match.matched_product_name}</span>
+                                {match.matched_variation_name && <span className="ml-1.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">{match.matched_variation_name}</span>}
+                                {!match.matched_variation_name && variation && <span className="ml-1.5 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] font-medium">No variation match</span>}
+                              </div>
+                            )}
+                          </div>
                           </div>
                           <div className="mt-1.5 text-xs text-gray-400 whitespace-pre-line">{order.address}</div>
                         </div>
