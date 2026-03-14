@@ -419,8 +419,254 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
   return orders;
 }
 
+// Parse Gmail-fetched Etsy order emails (text/plain format with HTML address blocks)
+function parseGmailEtsyOrders(rawText: string): ParsedEtsyOrder[] {
+  const orders: ParsedEtsyOrder[] = [];
+
+  // Split into individual order blocks by looking for EMAIL_DATE or order number patterns
+  // Each email starts with "EMAIL_DATE: ..." followed by the order body
+  const blocks: string[] = [];
+  const emailDatePattern = /(EMAIL_DATE:\s*.+)/g;
+  const orderStartPattern = /(Your order number is \d|Congratulations on your Etsy order for)/g;
+
+  // Try splitting by EMAIL_DATE markers first (from Gmail fetch)
+  const dateSplitPoints: number[] = [];
+  let match;
+  while ((match = emailDatePattern.exec(rawText)) !== null) {
+    dateSplitPoints.push(match.index);
+  }
+
+  if (dateSplitPoints.length > 0) {
+    for (let i = 0; i < dateSplitPoints.length; i++) {
+      const start = dateSplitPoints[i];
+      const end = i + 1 < dateSplitPoints.length ? dateSplitPoints[i + 1] : rawText.length;
+      blocks.push(rawText.substring(start, end));
+    }
+  } else {
+    // Fallback: split by order number patterns
+    const splitPoints: number[] = [];
+    while ((match = orderStartPattern.exec(rawText)) !== null) {
+      splitPoints.push(match.index);
+    }
+    if (splitPoints.length === 0) return [];
+    for (let i = 0; i < splitPoints.length; i++) {
+      const start = splitPoints[i];
+      const end = i + 1 < splitPoints.length ? splitPoints[i + 1] : rawText.length;
+      blocks.push(rawText.substring(start, end));
+    }
+  }
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+    // Extract order number: "Your order number is 4000803964." or from URL "/orders/XXXX"
+    let etsy_order_no = '';
+    const orderNoMatch = block.match(/Your order number is (\d+)/);
+    if (orderNoMatch) {
+      etsy_order_no = orderNoMatch[1];
+    } else {
+      const urlMatch = block.match(/\/orders\/(\d+)/);
+      if (urlMatch) etsy_order_no = urlMatch[1];
+    }
+    if (!etsy_order_no) continue;
+
+    // Extract shipping address from HTML <address> block
+    let customer_name = '';
+    let addressParts: string[] = [];
+    const addressMatch = block.match(/<address[^>]*>([\s\S]*?)<\/address>/);
+    if (addressMatch) {
+      const addrHtml = addressMatch[1];
+      // Extract name
+      const nameMatch = addrHtml.match(/<span class='name'>(.*?)<\/span>/);
+      if (nameMatch) customer_name = nameMatch[1].trim();
+      // Extract address parts from spans
+      const firstLine = addrHtml.match(/<span class='first-line'>(.*?)<\/span>/);
+      const secondLine = addrHtml.match(/<span class='second-line'>(.*?)<\/span>/);
+      const city = addrHtml.match(/<span class='city'>(.*?)<\/span>/);
+      const state = addrHtml.match(/<span class='state'>(.*?)<\/span>/);
+      const zip = addrHtml.match(/<span class='zip'>(.*?)<\/span>/);
+      const country = addrHtml.match(/<span class='country-name'>(.*?)<\/span>/);
+
+      // Build address lines for formatAddress
+      const streetParts: string[] = [];
+      if (firstLine) streetParts.push(firstLine[1].trim());
+      if (secondLine) streetParts.push(secondLine[1].trim());
+
+      // Build the labeled address directly since we have structured data
+      const addrParts: string[] = [`Name: ${customer_name}`];
+      if (streetParts.length > 0) addrParts.push(`Address: ${streetParts.join(', ')}`);
+      if (city) addrParts.push(`City: ${city[1].trim()}`);
+      if (state) addrParts.push(`Province/State: ${state[1].trim()}`);
+      else {
+        // Try to look up region from zip+country for non-US addresses
+        const countryName = country ? country[1].trim() : '';
+        const zipCode = zip ? zip[1].trim() : '';
+        const region = zipCode && countryName ? lookupRegionFromPostcode(zipCode, countryName) : '';
+        addrParts.push(`Province/State: ${region}`);
+      }
+      if (country) addrParts.push(`Country: ${country[1].trim()}`);
+      if (zip) addrParts.push(`Zip code: ${zip[1].trim()}`);
+      addressParts = addrParts;
+    } else {
+      // Fallback: try to parse "Shipping Address:" section without HTML
+      const addrIdx = lines.findIndex(l => l.startsWith('Shipping Address'));
+      if (addrIdx >= 0) {
+        customer_name = lines[addrIdx + 1] || '';
+        const addrLines: string[] = [];
+        for (let i = addrIdx + 2; i < lines.length; i++) {
+          if (lines[i].startsWith('---') || lines[i].startsWith('Shop policies') || lines[i].startsWith('Contacting')) break;
+          addrLines.push(lines[i]);
+        }
+        addressParts = [formatAddress(customer_name, addrLines)];
+      }
+    }
+
+    const address = addressParts.length > 0
+      ? (addressParts.length === 1 ? addressParts[0] : addressParts.join('\n'))
+      : '';
+
+    // Extract product details from Transaction ID blocks
+    const productBlocks: Array<{
+      name: string;
+      quantity: number;
+      price: number;
+      color?: string;
+      size?: string;
+      style?: string;
+    }> = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.match(/^Transaction ID:\s*/)) continue;
+
+      // Search forward for Item, variations, Quantity, Item price
+      let productName = '';
+      let quantity = 1;
+      let price = 0;
+      let color: string | undefined;
+      let size: string | undefined;
+      let style: string | undefined;
+
+      for (let j = i + 1; j < Math.min(i + 15, lines.length); j++) {
+        const l = lines[j];
+        if (l.startsWith('---')) break;
+        // Next Transaction ID means new product
+        if (l.match(/^Transaction ID:/)) break;
+
+        const itemMatch = l.match(/^Item:\s*(.+)/);
+        if (itemMatch) { productName = itemMatch[1].trim(); continue; }
+
+        const qMatch = l.match(/^Quantity:\s*(\d+)/);
+        if (qMatch) { quantity = parseInt(qMatch[1]); continue; }
+
+        const pMatch = l.match(/^Item price:\s*\$([\d.]+)/);
+        if (pMatch) { price = parseFloat(pMatch[1]); continue; }
+
+        const styleMatch = l.match(/^Style:\s*(.+)/);
+        if (styleMatch) { style = styleMatch[1].trim(); continue; }
+
+        const colorMatch = l.match(/^Color:\s*(.+)/);
+        if (colorMatch) { color = colorMatch[1].trim(); continue; }
+
+        const sizeMatch = l.match(/^Size:\s*(.+)/);
+        if (sizeMatch) { size = sizeMatch[1].trim(); continue; }
+
+        const chooseMatch = l.match(/^Choose\s+\w+:\s*(.+)/);
+        if (chooseMatch) { style = chooseMatch[1].trim(); continue; }
+      }
+
+      if (productName) {
+        productBlocks.push({ name: productName, quantity, price, color, size, style });
+      }
+    }
+
+    if (productBlocks.length === 0) continue;
+
+    // Extract order total
+    let sold_for = 0;
+    const totalMatch = block.match(/Order Total:\s*\$([\d.]+)/);
+    if (totalMatch) sold_for = parseFloat(totalMatch[1]);
+
+    // Extract coupon/discount
+    let coupon_code: string | undefined;
+    let sale_percent: number | undefined;
+    const discountSection = block.match(/Applied discounts[\s\S]*?-\s*(\w+)/);
+    if (discountSection) {
+      coupon_code = discountSection[1].trim();
+      const saleMatch = coupon_code.match(/(\d+)/);
+      if (saleMatch) sale_percent = parseInt(saleMatch[1]);
+    }
+
+    // Extract date from EMAIL_DATE header injected by Gmail fetch, or "Paid via" line
+    let ordered_date = '';
+    // EMAIL_DATE format: "Fri, 7 Mar 2026 10:23:45 +0000" or similar RFC 2822
+    const emailDateMatch = block.match(/EMAIL_DATE:\s*(.+)/);
+    if (emailDateMatch) {
+      const d = new Date(emailDateMatch[1].trim());
+      if (!isNaN(d.getTime())) {
+        ordered_date = d.toISOString().split('T')[0];
+      }
+    }
+    if (!ordered_date) {
+      const paidMatch = block.match(/Paid via.*?on\s+(\w+ \d+,?\s*\d{4})/);
+      if (paidMatch) ordered_date = parseEtsyDate(paidMatch[1]);
+    }
+
+    // Extract ship_by from subject line: "Ship by Mar 19"
+    let ship_by = '';
+    const subjectMatch = block.match(/EMAIL_SUBJECT:\s*(.+)/);
+    if (subjectMatch) {
+      const shipByMatch = subjectMatch[1].match(/Ship by (\w+ \d+)/);
+      if (shipByMatch) {
+        // Add current year since subject doesn't include it
+        const year = ordered_date ? ordered_date.split('-')[0] : new Date().getFullYear().toString();
+        ship_by = parseEtsyDate(`${shipByMatch[1]}, ${year}`);
+      }
+    }
+    // Fallback: calculate from ordered_date (Mon-Fri, +4 business days for 1-4 day processing)
+    if (!ship_by && ordered_date) {
+      ship_by = calculateShipBy(ordered_date);
+    }
+
+    // Create order entries
+    for (let pi = 0; pi < productBlocks.length; pi++) {
+      const product = productBlocks[pi];
+      let product_name = product.name;
+      const variation = product.style || product.color || product.size;
+      if (variation) {
+        product_name = `${product.name} – ${variation}`;
+      }
+
+      orders.push({
+        etsy_order_no,
+        customer_name,
+        address,
+        product_name,
+        quantity: product.quantity,
+        sold_for: pi === 0 ? sold_for : 0,
+        coupon_code: pi === 0 ? coupon_code : undefined,
+        sale_percent: pi === 0 ? sale_percent : undefined,
+        ordered_date,
+        ship_by,
+        color: product.color,
+        size: product.size,
+        style: product.style,
+        has_vat: false,
+      });
+    }
+  }
+
+  return orders;
+}
+
 export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
-  // Auto-detect email format
+  // Auto-detect Gmail-fetched format (text/plain with HTML address blocks or "Your order number is" without colon)
+  if (rawText.includes('Transaction ID:') && (rawText.includes('Item:') || rawText.includes('Item price:'))) {
+    const gmailResults = parseGmailEtsyOrders(rawText);
+    if (gmailResults.length > 0) return gmailResults;
+  }
+
+  // Auto-detect email notification format (manually pasted from browser)
   if (rawText.includes('Congratulations on your Etsy sale') || rawText.includes('Your order number is:')) {
     return parseEtsyEmailOrders(rawText);
   }

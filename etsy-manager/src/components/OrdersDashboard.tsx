@@ -6,7 +6,7 @@ import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supab
 import { parseEtsyOrders, ParsedEtsyOrder } from '@/lib/etsy-parser';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
-import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu, Ban } from 'lucide-react';
+import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu, Ban, Mail } from 'lucide-react';
 import { useSidebar } from '@/lib/sidebar-context';
 import EditableField from './EditableField';
 
@@ -113,6 +113,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [importExisting, setImportExisting] = useState<Set<string>>(new Set()); // order numbers already in DB
   const [importMatched, setImportMatched] = useState<Map<string, { image_url?: string; supplier_name?: string; matched_product_name?: string; matched_variation_name?: string }>>(new Map()); // product matches by order index
   const [importReplaceExisting, setImportReplaceExisting] = useState(false); // replace existing orders option
+  const [gmailFetching, setGmailFetching] = useState(false);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [gmailDaysOpen, setGmailDaysOpen] = useState(false);
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
@@ -171,6 +174,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     if (selectedStore) {
       fetchOrders();
       fetchProducts();
+      checkGmailConnection();
     }
   }, [selectedStore]);
 
@@ -899,6 +903,60 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     setImportExisting(new Set());
     setImportMatched(new Map());
     setImportReplaceExisting(false);
+    setGmailFetching(false);
+  };
+
+  // Check Gmail connection for current store
+  const checkGmailConnection = async () => {
+    if (!selectedStore) return;
+    try {
+      const { data, error } = await supabase
+        .from('gmail_tokens')
+        .select('email')
+        .eq('store_id', selectedStore.id)
+        .maybeSingle();
+      console.log('Gmail check:', { data, error, storeId: selectedStore.id });
+      setGmailConnected(!!data && !error);
+    } catch (e) {
+      console.error('Gmail check error:', e);
+      setGmailConnected(false);
+    }
+  };
+
+  // Fetch orders from Gmail
+  const handleFetchFromGmail = async (days: number) => {
+    if (!selectedStore) return;
+    setGmailFetching(true);
+    setGmailDaysOpen(false);
+    try {
+      const res = await fetch('/api/gmail/fetch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store_id: selectedStore.id, max_results: 50, days }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setCopyToast(data.error || 'Failed to fetch from Gmail');
+        return;
+      }
+
+      if (!data.emails || data.emails.length === 0) {
+        setCopyToast('No Etsy order emails found');
+        return;
+      }
+
+      // Combine all email bodies, injecting the email date header for parsing
+      const combinedText = data.emails.map((e: any) => {
+        return `EMAIL_DATE: ${e.date}\nEMAIL_SUBJECT: ${e.subject}\n${e.body}`;
+      }).join('\n\n');
+      setImportRawText(combinedText);
+      setCopyToast(`Fetched ${data.emails.length} emails (last ${days} day${days > 1 ? 's' : ''})`);
+    } catch (err) {
+      setCopyToast('Failed to fetch from Gmail');
+    } finally {
+      setGmailFetching(false);
+    }
   };
 
   // Acknowledge order when supplier views it (for non-admin)
@@ -994,9 +1052,9 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   }, [handleResizeMove, handleResizeEnd, handleRowResizeMove, handleRowResizeEnd]);
 
   // Helper functions for order status
-  const isNewOrder = (order: Order) => !order.is_paid && !order.is_shipped && !order.is_delivered; // Order is NEW until paid/shipped/delivered
-  const needsTracking = (order: Order) => !order.tracking_number; // Needs tracking until supplier fills it
-  const isOutOfStock = (order: Order) => order.is_out_of_stock;
+  const isNewOrder = (order: Order) => !order.is_cancelled && !order.is_paid && !order.is_shipped && !order.is_delivered;
+  const needsTracking = (order: Order) => !order.is_cancelled && !order.tracking_number;
+  const isOutOfStock = (order: Order) => !order.is_cancelled && order.is_out_of_stock;
 
   // Count orders by status for filter tabs
   const statusCounts = {
@@ -1004,11 +1062,11 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     new: orders.filter(isNewOrder).length,
     paid: orders.filter(order => order.is_paid).length,
     needs_tracking: orders.filter(needsTracking).length,
-    shipped: orders.filter(order => order.is_shipped).length,
-    delivered: orders.filter(order => order.is_delivered).length,
+    shipped: orders.filter(order => !order.is_cancelled && order.is_shipped).length,
+    delivered: orders.filter(order => !order.is_cancelled && order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
     cancelled: orders.filter(order => !!order.is_cancelled).length,
-    issue: orders.filter(order => !!order.issue).length,
+    issue: orders.filter(order => !order.is_cancelled && !!order.issue).length,
   };
 
   const filteredOrders = orders
@@ -1017,11 +1075,11 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'new' && !isNewOrder(order)) return false;
       if (statusFilter === 'paid' && !order.is_paid) return false;
       if (statusFilter === 'needs_tracking' && !needsTracking(order)) return false;
-      if (statusFilter === 'shipped' && !order.is_shipped) return false;
-      if (statusFilter === 'delivered' && !order.is_delivered) return false;
+      if (statusFilter === 'shipped' && (!order.is_shipped || order.is_cancelled)) return false;
+      if (statusFilter === 'delivered' && (!order.is_delivered || order.is_cancelled)) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
       if (statusFilter === 'cancelled' && !order.is_cancelled) return false;
-      if (statusFilter === 'issue' && !order.issue) return false;
+      if (statusFilter === 'issue' && (!order.issue || order.is_cancelled)) return false;
 
       // Then apply search filter
       if (!searchTerm) return true;
@@ -1277,7 +1335,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               </button>
               {isAdmin && (
                 <button
-                  onClick={() => setImportModalOpen(true)}
+                  onClick={() => { setImportModalOpen(true); checkGmailConnection(); }}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg font-medium text-white hover:opacity-90 transition-opacity bg-green-600"
                   title="Import Etsy"
                 >
@@ -1989,8 +2047,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
         {isAdmin && orders.length > 0 && (
           <div className="py-2 flex justify-end gap-6 text-sm flex-shrink-0">
             <span className="text-gray-600">{filteredOrders.length} orders</span>
-            <span className="text-gray-600">Total Sales: <strong className="text-green-600">{formatCurrency(filteredOrders.reduce((s, o) => s + (o.sold_for || 0), 0))}</strong></span>
-            <span className="text-gray-600">Total Profit: <strong style={{ color: BRAND_ORANGE }}>{formatCurrency(filteredOrders.reduce((s, o) => s + (o.profit || 0), 0))}</strong></span>
+            <span className="text-gray-600">Total Sales: <strong className="text-green-600">{formatCurrency(filteredOrders.filter(o => !o.is_cancelled).reduce((s, o) => s + (o.sold_for || 0), 0))}</strong></span>
+            <span className="text-gray-600">Total Profit: <strong style={{ color: BRAND_ORANGE }}>{formatCurrency(filteredOrders.filter(o => !o.is_cancelled).reduce((s, o) => s + (o.profit || 0), 0))}</strong></span>
           </div>
         )}
       </div>
@@ -2543,8 +2601,8 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-900">{filteredOrders.length} orders</span>
               <div className="flex items-center gap-4">
-                <span className="text-gray-900">Sales: <strong className="text-green-600">{formatCurrency(filteredOrders.reduce((s, o) => s + (o.sold_for || 0), 0))}</strong></span>
-                <span className="text-gray-900">Profit: <strong style={{ color: BRAND_ORANGE }}>{formatCurrency(filteredOrders.reduce((s, o) => s + (o.profit || 0), 0))}</strong></span>
+                <span className="text-gray-900">Sales: <strong className="text-green-600">{formatCurrency(filteredOrders.filter(o => !o.is_cancelled).reduce((s, o) => s + (o.sold_for || 0), 0))}</strong></span>
+                <span className="text-gray-900">Profit: <strong style={{ color: BRAND_ORANGE }}>{formatCurrency(filteredOrders.filter(o => !o.is_cancelled).reduce((s, o) => s + (o.profit || 0), 0))}</strong></span>
               </div>
             </div>
           </div>
@@ -3310,9 +3368,45 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             <div className="flex-1 overflow-y-auto p-4">
               {!importPreview ? (
                 <div>
-                  <p className="text-sm text-gray-600 mb-3">
-                    Paste raw order text from Etsy orders page. Existing orders will be updated (e.g. tracking numbers), new orders will be added.
-                  </p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm text-gray-600">
+                      Paste raw order text from Etsy, or fetch directly from Gmail.
+                    </p>
+                    <div className="relative">
+                      <button
+                        onClick={() => setGmailDaysOpen(!gmailDaysOpen)}
+                        disabled={gmailFetching}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg"
+                      >
+                        {gmailFetching ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Mail className="w-4 h-4" />
+                        )}
+                        {gmailFetching ? 'Fetching...' : 'Fetch from Gmail'}
+                        {!gmailFetching && <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+                      {gmailDaysOpen && !gmailFetching && (
+                        <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1 min-w-[160px]">
+                          {[
+                            { label: 'Last 24 hours', days: 1 },
+                            { label: 'Last 2 days', days: 2 },
+                            { label: 'Last 3 days', days: 3 },
+                            { label: 'Last 5 days', days: 5 },
+                            { label: 'Last 7 days', days: 7 },
+                          ].map((opt) => (
+                            <button
+                              key={opt.days}
+                              onClick={() => handleFetchFromGmail(opt.days)}
+                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700"
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <textarea
                     value={importRawText}
                     onChange={(e) => setImportRawText(e.target.value)}
