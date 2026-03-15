@@ -459,6 +459,9 @@ function parseGmailEtsyOrders(rawText: string): ParsedEtsyOrder[] {
   for (const block of blocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
+    // Debug: log first 5 lines of each block
+    console.log('[Gmail parser] Block first 5 lines:', lines.slice(0, 5));
+
     // Extract order number: "Your order number is 4000803964." or from URL "/orders/XXXX"
     let etsy_order_no = '';
     const orderNoMatch = block.match(/Your order number is (\d+)/);
