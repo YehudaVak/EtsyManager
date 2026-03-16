@@ -1052,7 +1052,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   }, [handleResizeMove, handleResizeEnd, handleRowResizeMove, handleRowResizeEnd]);
 
   // Helper functions for order status
-  const isNewOrder = (order: Order) => !order.is_cancelled && !order.is_paid && !order.is_shipped && !order.is_delivered;
+  const isNewOrder = (order: Order) => !order.is_cancelled && !order.is_paid && !order.is_shipped && !order.is_delivered && !order.tracking_number;
   const needsTracking = (order: Order) => !order.is_cancelled && !order.tracking_number;
   const isOutOfStock = (order: Order) => !order.is_cancelled && order.is_out_of_stock;
 
