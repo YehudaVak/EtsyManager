@@ -93,6 +93,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   // Multi-select state
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [showBulkActions, setShowBulkActions] = useState(false);
 
   // Filter state for supplier status tabs
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'cancelled' | 'issue'>('all');
@@ -315,6 +316,24 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       console.error('Error deleting orders:', error);
       alert('Failed to delete some orders. Please try again.');
       setBulkDeleteConfirm(false);
+    }
+  };
+
+  const handleBulkStatusUpdate = async (updates: Partial<Order>) => {
+    try {
+      const ids = Array.from(selectedOrders);
+      const { error } = await supabase
+        .from('orders')
+        .update(updates)
+        .in('id', ids);
+
+      if (error) throw error;
+      setOrders(prev => prev.map(o => selectedOrders.has(o.id) ? { ...o, ...updates } : o));
+      setSelectedOrders(new Set());
+      setShowBulkActions(false);
+    } catch (error) {
+      console.error('Error updating orders:', error);
+      alert('Failed to update some orders. Please try again.');
     }
   };
 
@@ -1066,7 +1085,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     delivered: orders.filter(order => !order.is_cancelled && order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
     cancelled: orders.filter(order => !!order.is_cancelled).length,
-    issue: orders.filter(order => !order.is_cancelled && !!order.issue).length,
+    issue: orders.filter(order => !order.is_cancelled && !!order.issue && !order.issue_resolved).length,
   };
 
   const filteredOrders = orders
@@ -1079,7 +1098,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'delivered' && (!order.is_delivered || order.is_cancelled)) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
       if (statusFilter === 'cancelled' && !order.is_cancelled) return false;
-      if (statusFilter === 'issue' && (!order.issue || order.is_cancelled)) return false;
+      if (statusFilter === 'issue' && (!order.issue || order.is_cancelled || order.issue_resolved)) return false;
 
       // Then apply search filter
       if (!searchTerm) return true;
@@ -1514,12 +1533,63 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
       {/* Bulk Actions Bar */}
       {isAdmin && selectedOrders.size > 0 && (
-        <div className="mx-4 mt-3 flex items-center gap-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl">
+        <div className="mx-4 mt-3 flex items-center gap-3 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl flex-wrap">
           <CheckSquare className="w-5 h-5 text-orange-600" />
           <span className="text-sm font-medium text-orange-800">
             {selectedOrders.size} order{selectedOrders.size > 1 ? 's' : ''} selected
           </span>
           <div className="flex-1" />
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowBulkActions(!showBulkActions)}
+              className="px-3 py-1.5 text-sm font-medium text-white bg-[#d96f36] rounded-lg hover:bg-[#c45f2a] transition-colors flex items-center gap-1.5"
+            >
+              Update Status
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {showBulkActions && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setShowBulkActions(false)} />
+                <div className="absolute right-0 top-full mt-1 z-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[180px]">
+                  <button onClick={() => handleBulkStatusUpdate({ is_paid: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-green-500" /> Mark as Paid
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ is_paid: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark as Unpaid
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button onClick={() => handleBulkStatusUpdate({ is_shipped: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" /> Mark as Shipped
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ is_shipped: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark as Not Shipped
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button onClick={() => handleBulkStatusUpdate({ is_delivered: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-purple-500" /> Mark as Delivered
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ is_delivered: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark as Not Delivered
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button onClick={() => handleBulkStatusUpdate({ is_out_of_stock: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-yellow-500" /> Mark Out of Stock
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ is_out_of_stock: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark In Stock
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button onClick={() => handleBulkStatusUpdate({ is_cancelled: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-red-500" /> Mark as Cancelled
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ is_cancelled: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Uncancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <button
             type="button"
             onClick={clearSelection}
@@ -1533,7 +1603,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             className="px-3 py-1.5 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors flex items-center gap-1.5"
           >
             <Trash2 className="w-4 h-4" />
-            Delete Selected
+            Delete
           </button>
         </div>
       )}
@@ -3219,27 +3289,51 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
               {/* Issues Section (Admin Only) */}
               {isAdmin && (
-                <div className={`rounded-xl p-4 border-2 ${selectedOrder.issue ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`rounded-xl p-4 border-2 ${selectedOrder.issue && !selectedOrder.issue_resolved ? 'bg-red-50 border-red-300' : selectedOrder.issue_resolved ? 'bg-green-50 border-green-300' : 'bg-gray-50 border-gray-200'}`}>
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className={`font-semibold ${selectedOrder.issue ? 'text-red-800' : 'text-gray-700'}`}>Issues & Solutions</h3>
-                    {selectedOrder.issue ? (
-                      <button
-                        onClick={() => {
-                          handleFieldUpdate(selectedOrder.id, 'issue', '');
-                          handleFieldUpdate(selectedOrder.id, 'the_solution', '');
-                        }}
-                        className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Resolve Issue
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleFieldUpdate(selectedOrder.id, 'issue', 'Action needed')}
-                        className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Flag Issue
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <h3 className={`font-semibold ${selectedOrder.issue && !selectedOrder.issue_resolved ? 'text-red-800' : selectedOrder.issue_resolved ? 'text-green-800' : 'text-gray-700'}`}>Issues & Solutions</h3>
+                      {selectedOrder.issue_resolved && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">RESOLVED</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {selectedOrder.issue && !selectedOrder.issue_resolved ? (
+                        <button
+                          onClick={() => handleFieldUpdate(selectedOrder.id, 'issue_resolved', true)}
+                          className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          Resolve Issue
+                        </button>
+                      ) : selectedOrder.issue_resolved ? (
+                        <button
+                          onClick={() => handleFieldUpdate(selectedOrder.id, 'issue_resolved', false)}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          Reopen Issue
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleFieldUpdate(selectedOrder.id, 'issue', 'Action needed')}
+                          className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          Flag Issue
+                        </button>
+                      )}
+                      {selectedOrder.issue && (
+                        <button
+                          onClick={() => {
+                            handleFieldUpdate(selectedOrder.id, 'issue', '');
+                            handleFieldUpdate(selectedOrder.id, 'the_solution', '');
+                            handleFieldUpdate(selectedOrder.id, 'issue_resolved', false);
+                          }}
+                          className="px-2 py-1.5 text-gray-400 hover:text-red-500 rounded-lg text-xs transition-colors"
+                          title="Clear issue completely"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>

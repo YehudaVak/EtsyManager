@@ -111,6 +111,7 @@ export interface Order {
   // Issues & Notes
   issue?: string;
   the_solution?: string;
+  issue_resolved?: boolean;
   internal_notes?: string;
 
   // VAT
@@ -148,7 +149,7 @@ export const SUPPLIER_SELECT_COLUMNS = `
   is_shipped, shipped_message_sent, is_completed_on_etsy,
   is_delivered, review_message_sent, order_from,
   supplier_acknowledged, is_out_of_stock,
-  issue, the_solution, internal_notes,
+  issue, the_solution, issue_resolved, internal_notes,
   product_id
 `;
 
