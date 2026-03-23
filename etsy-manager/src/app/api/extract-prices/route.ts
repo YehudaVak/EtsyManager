@@ -8,7 +8,8 @@ dns.setDefaultResultOrder('ipv4first');
 export async function POST(request: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 });
+    const allKeys = Object.keys(process.env).filter(k => k.includes('ANTHROP')).join(', ');
+    return NextResponse.json({ error: `ANTHROPIC_API_KEY not configured. Related keys found: [${allKeys}]` }, { status: 500 });
   }
 
   try {
