@@ -285,14 +285,24 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
     let vat_number: string | undefined;
     let vat_amount: string | undefined;
 
-    const vatIdx = lines.findIndex(l => l === 'VAT collected');
+    const vatIdx = lines.findIndex(l => /^VAT [Cc]ollected$/i.test(l));
     if (vatIdx >= 0) {
       has_vat = true;
-      for (let i = vatIdx + 1; i < Math.min(vatIdx + 8, lines.length); i++) {
-        const vatMatch = lines[i].match(/VAT number,?\s*([\d\s]+)/);
-        if (vatMatch) vat_number = vatMatch[1].trim();
-        const amountMatch = lines[i].match(/[£€]([\d.]+)/);
-        if (amountMatch) vat_amount = amountMatch[0];
+      const vatBlock = lines.slice(vatIdx + 1, vatIdx + 10).join(' ');
+      const iossMatch = vatBlock.match(/IOSS number,?\s*([\w\d]+)/i);
+      if (iossMatch) vat_number = iossMatch[1].trim();
+      const vatNumMatch = vatBlock.match(/VAT number,?\s*([\d\s]+)/i);
+      if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
+      const amountMatch = vatBlock.match(/[£€$]([\d.]+)/);
+      if (amountMatch) vat_amount = amountMatch[0];
+    }
+
+    // Also check Tax line in order totals as fallback for vat_amount
+    if (has_vat && !vat_amount) {
+      const taxLine = lines.find(l => /^Tax:/.test(l));
+      if (taxLine) {
+        const taxMatch = taxLine.match(/[\$£€]([\d.]+)/);
+        if (taxMatch) vat_amount = taxMatch[0];
       }
     }
 
@@ -776,9 +786,10 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
 
       // Collect address lines until we hit a known terminator
       const terminators = [
-        'USPS Verified', 'VAT Collected', 'Marked as gift',
-        'Order in reserve', 'Using shipping labels',
-        'Learn More', 'Select this order', 'Standard Shipping',
+        'USPS Verified', 'VAT collected', 'VAT Collected', 'Marked as gift',
+        'Order in reserve', 'Using shipping labels', 'Shipping internationally',
+        'Double check', 'We\'re applying', 'Sell with confidence',
+        'Learn More', 'Learn more', 'Select this order', 'Standard Shipping',
         'Free Shipping', 'Other Shipping', 'Expedited', 'Express'
       ];
 
@@ -801,18 +812,25 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
     let vat_number: string | undefined;
     let vat_amount: string | undefined;
 
-    const vatIdx = lines.findIndex(l => l === 'VAT Collected');
+    const vatIdx = lines.findIndex(l => /^VAT [Cc]ollected$/i.test(l));
     if (vatIdx >= 0) {
       has_vat = true;
-      // Look for VAT number and amount in subsequent lines
-      for (let i = vatIdx + 1; i < Math.min(vatIdx + 5, lines.length); i++) {
-        const vatMatch = lines[i].match(/VAT number,\s*([\d\s]+),/);
-        if (vatMatch) vat_number = vatMatch[1].trim();
-        const amountMatch = lines[i].match(/(?:pounds|euros),\s*([£€][\d.]+),/);
-        if (amountMatch) vat_amount = amountMatch[1];
-        // Also try IOSS format
-        const iossMatch = lines[i].match(/IOSS number,\s*([\w\d]+),/);
-        if (iossMatch) vat_number = iossMatch[1].trim();
+      // Look in subsequent lines for IOSS/VAT number and amount
+      const vatBlock = lines.slice(vatIdx + 1, vatIdx + 10).join(' ');
+      const iossMatch = vatBlock.match(/IOSS number,?\s*([\w\d]+)/i);
+      if (iossMatch) vat_number = iossMatch[1].trim();
+      const vatNumMatch = vatBlock.match(/VAT number,?\s*([\d\s]+)/i);
+      if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
+      const amountMatch = vatBlock.match(/[£€$]([\d.]+)/);
+      if (amountMatch) vat_amount = amountMatch[0];
+    }
+
+    // Also check Tax line in order totals as fallback for vat_amount
+    if (has_vat && !vat_amount) {
+      const taxLine = lines.find(l => /^Tax:/.test(l));
+      if (taxLine) {
+        const taxMatch = taxLine.match(/[\$£€]([\d.]+)/);
+        if (taxMatch) vat_amount = taxMatch[0];
       }
     }
 
