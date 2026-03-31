@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, Order, ProductWithPricing, ProductPricing } from '@/lib/supabase';
-import { parseEtsyOrders, ParsedEtsyOrder } from '@/lib/etsy-parser';
+import { parseEtsyOrders, ParsedEtsyOrder, parseTrackingUpdates, ParsedTrackingUpdate } from '@/lib/etsy-parser';
 import { uploadOrderImage, replaceOrderImage } from '@/lib/storage';
 import { useAuth } from '@/lib/auth';
 import { Plus, Search, RefreshCw, ExternalLink, Camera, ChevronDown, ChevronUp, Trash2, X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Package, Truck, ShoppingBag, CheckSquare, Upload, Pencil, Image, ClipboardCopy, Menu, Ban, Mail } from 'lucide-react';
@@ -114,9 +114,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [importExisting, setImportExisting] = useState<Set<string>>(new Set()); // order numbers already in DB
   const [importMatched, setImportMatched] = useState<Map<string, { image_url?: string; supplier_name?: string; matched_product_name?: string; matched_variation_name?: string }>>(new Map()); // product matches by order index
   const [importReplaceExisting, setImportReplaceExisting] = useState(false); // replace existing orders option
+  const [importSelected, setImportSelected] = useState<Set<number>>(new Set()); // selected order indices to import
   const [gmailFetching, setGmailFetching] = useState(false);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [gmailDaysOpen, setGmailDaysOpen] = useState(false);
+  const [importMode, setImportMode] = useState<'orders' | 'tracking'>('orders');
+  const [trackingUpdates, setTrackingUpdates] = useState<(ParsedTrackingUpdate & { matched: boolean; current_tracking?: string })[]>([]);
+  const [trackingResults, setTrackingResults] = useState<{ updated: number; not_found: number } | null>(null);
 
   // Products for selector
   const [products, setProducts] = useState<ProductWithPricing[]>([]);
@@ -738,6 +742,15 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       }
     });
     setImportMatched(matchMap);
+
+    // Auto-select non-existing orders
+    const selectedIndices = new Set<number>();
+    parsed.forEach((p, idx) => {
+      if (!existingSet.has(p.etsy_order_no)) {
+        selectedIndices.add(idx);
+      }
+    });
+    setImportSelected(selectedIndices);
   };
 
   // Import from Etsy - upsert orders
@@ -798,7 +811,15 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       // Insert all orders — batch insert for reliability
       const newOrders: Record<string, any>[] = [];
 
-      for (const parsed of importParsed) {
+      for (let idx = 0; idx < importParsed.length; idx++) {
+        const parsed = importParsed[idx];
+
+        // Skip if not selected
+        if (!importSelected.has(idx)) {
+          skipped++;
+          continue;
+        }
+
         // Skip if order already exists and we're not replacing
         if (existingOrderNos.has(parsed.etsy_order_no)) {
           console.log(`[import] Skipping existing order #${parsed.etsy_order_no}`);
@@ -922,7 +943,77 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     setImportExisting(new Set());
     setImportMatched(new Map());
     setImportReplaceExisting(false);
+    setImportSelected(new Set());
     setGmailFetching(false);
+    setImportMode('orders');
+    setTrackingUpdates([]);
+    setTrackingResults(null);
+  };
+
+  // Parse tracking numbers from pasted Etsy order detail text
+  const handleParseTracking = async () => {
+    const parsed = parseTrackingUpdates(importRawText);
+    if (parsed.length === 0) {
+      alert('No tracking numbers found. Make sure the text contains "Order #..." and "Tracking" sections.');
+      return;
+    }
+
+    // Match against existing orders in DB
+    const orderNos = parsed.map(p => p.etsy_order_no);
+    const { data: existingOrders } = await supabase
+      .from('orders')
+      .select('etsy_order_no, tracking_number')
+      .eq('store_id', selectedStore!.id)
+      .in('etsy_order_no', orderNos);
+
+    const existingMap = new Map<string, string | null>();
+    existingOrders?.forEach(o => {
+      if (!existingMap.has(o.etsy_order_no)) {
+        existingMap.set(o.etsy_order_no, o.tracking_number);
+      }
+    });
+
+    const enriched = parsed.map(p => ({
+      ...p,
+      matched: existingMap.has(p.etsy_order_no),
+      current_tracking: existingMap.get(p.etsy_order_no) || undefined,
+    }));
+
+    setTrackingUpdates(enriched);
+    setImportPreview(true);
+  };
+
+  // Apply tracking updates to matched orders
+  const handleApplyTracking = async () => {
+    setImportLoading(true);
+    let updated = 0;
+    let not_found = 0;
+
+    for (const update of trackingUpdates) {
+      if (!update.matched) {
+        not_found++;
+        continue;
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update({ tracking_number: update.tracking_number, tracking_added: true })
+        .eq('store_id', selectedStore!.id)
+        .eq('etsy_order_no', update.etsy_order_no);
+
+      if (!error) {
+        updated++;
+        // Update local state
+        setOrders(prev => prev.map(o =>
+          o.etsy_order_no === update.etsy_order_no
+            ? { ...o, tracking_number: update.tracking_number, tracking_added: true }
+            : o
+        ));
+      }
+    }
+
+    setTrackingResults({ updated, not_found });
+    setImportLoading(false);
   };
 
   // Check Gmail connection for current store
@@ -3458,13 +3549,86 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
               </button>
             </div>
 
+            {/* Mode Tabs */}
+            <div className="flex border-b px-4">
+              <button
+                onClick={() => { setImportMode('orders'); setImportPreview(false); setTrackingUpdates([]); setTrackingResults(null); }}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${importMode === 'orders' ? 'border-[#d96f36] text-[#d96f36]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                Import Orders
+              </button>
+              <button
+                onClick={() => { setImportMode('tracking'); setImportPreview(false); setImportParsed([]); setImportResults(null); }}
+                className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${importMode === 'tracking' ? 'border-[#d96f36] text-[#d96f36]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                Update Tracking
+              </button>
+            </div>
+
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4">
-              {!importPreview ? (
+              {importMode === 'tracking' ? (
+                /* Tracking Update Mode */
+                !importPreview ? (
+                  <div>
+                    <p className="text-sm text-gray-600 mb-3">
+                      Paste order details from Etsy that contain tracking numbers. You can paste multiple orders.
+                    </p>
+                    <textarea
+                      value={importRawText}
+                      onChange={(e) => setImportRawText(e.target.value)}
+                      placeholder={"Order #4014958620\n...\nTracking\nYT2608900708459139\nvia YunExpress\n..."}
+                      className="w-full h-64 p-3 border rounded-lg text-sm font-mono resize-y focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    {trackingResults ? (
+                      <div className="mb-4 p-4 rounded-lg bg-green-50 border border-green-200">
+                        <p className="font-semibold text-green-800">Tracking Update Complete</p>
+                        <p className="text-sm text-green-700 mt-1">
+                          {trackingResults.updated > 0 && <span className="mr-3">Updated: {trackingResults.updated}</span>}
+                          {trackingResults.not_found > 0 && <span className="text-amber-600">Not found: {trackingResults.not_found}</span>}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-600 mb-3">
+                        Found <strong>{trackingUpdates.length}</strong> tracking number{trackingUpdates.length !== 1 ? 's' : ''}.
+                      </p>
+                    )}
+                    <div className="space-y-2">
+                      {trackingUpdates.map((update, idx) => (
+                        <div key={idx} className={`border rounded-lg p-3 text-sm ${update.matched ? 'bg-white border-gray-200' : 'bg-red-50 border-red-200 opacity-60'}`}>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs text-gray-500">Order {update.etsy_order_no}</span>
+                              {update.matched ? (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-green-100 text-green-700">FOUND</span>
+                              ) : (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700">NOT IN DB</span>
+                              )}
+                            </div>
+                            {update.carrier && <span className="text-xs text-gray-400">{update.carrier}</span>}
+                          </div>
+                          <div className="mt-1.5 flex items-center gap-2">
+                            <span className="font-mono text-xs font-medium text-blue-700">{update.tracking_number}</span>
+                            {update.current_tracking && update.current_tracking !== update.tracking_number && (
+                              <span className="text-[10px] text-amber-600">was: {update.current_tracking}</span>
+                            )}
+                            {update.current_tracking === update.tracking_number && (
+                              <span className="text-[10px] text-gray-400">already set</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              ) : !importPreview ? (
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-sm text-gray-600">
-                      Paste raw order text from Etsy, or fetch directly from Gmail.
+                      Paste order text from Etsy, or fetch directly from Gmail.
                     </p>
                     <div className="relative">
                       <button
@@ -3504,7 +3668,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   <textarea
                     value={importRawText}
                     onChange={(e) => setImportRawText(e.target.value)}
-                    placeholder="Paste Etsy orders here..."
+                    placeholder={"Paste Etsy orders here...\n\nSupported formats:\n• Email notifications (Congratulations on your Etsy sale...)\n• Order detail page (Order #1234567890...)"}
                     className="w-full h-64 p-3 border rounded-lg text-sm font-mono resize-y focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
                   />
                 </div>
@@ -3521,14 +3685,33 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     </div>
                   ) : (
                     <div className="mb-3">
-                      <p className="text-sm text-gray-600">
-                        Found <strong>{importParsed.length}</strong> orders.
-                        {importExisting.size > 0 && (
-                          <span className="ml-1 text-amber-600">
-                            ({importExisting.size} already in database)
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-gray-600">
+                          Found <strong>{importParsed.length}</strong> orders.
+                          {importExisting.size > 0 && (
+                            <span className="ml-1 text-amber-600">
+                              ({importExisting.size} already in database)
+                            </span>
+                          )}
+                          <span className="ml-2 text-blue-600">
+                            ({importSelected.size} selected)
                           </span>
-                        )}
-                      </p>
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setImportSelected(new Set(importParsed.map((_, i) => i)))}
+                            className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            onClick={() => setImportSelected(new Set())}
+                            className="text-xs text-gray-500 hover:text-gray-700 font-medium"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
                       {importExisting.size > 0 && (
                         <label className="flex items-center gap-2 mt-2 text-sm cursor-pointer">
                           <input
@@ -3547,16 +3730,34 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       const variation = order.style || order.color || order.size;
                       const isExisting = importExisting.has(order.etsy_order_no);
                       const match = importMatched.get(`${idx}`);
-                      const willSkip = isExisting && !importReplaceExisting;
+                      const isSelected = importSelected.has(idx);
+                      const willSkip = !isSelected || (isExisting && !importReplaceExisting);
                       return (
-                        <div key={idx} className={`border rounded-lg p-3 text-sm ${willSkip ? 'opacity-50 bg-gray-50' : 'bg-white'} ${isExisting ? 'border-amber-300' : 'border-gray-200'}`}>
+                        <div
+                          key={idx}
+                          className={`border rounded-lg p-3 text-sm cursor-pointer transition-all ${willSkip ? 'opacity-50 bg-gray-50' : 'bg-white'} ${isSelected ? (isExisting ? 'border-amber-300' : 'border-blue-300 ring-1 ring-blue-200') : 'border-gray-200'}`}
+                          onClick={() => {
+                            setImportSelected(prev => {
+                              const next = new Set(prev);
+                              if (next.has(idx)) next.delete(idx);
+                              else next.add(idx);
+                              return next;
+                            });
+                          }}
+                        >
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                className="w-4 h-4 rounded border-gray-300 text-[#d96f36] focus:ring-[#d96f36] cursor-pointer"
+                              />
                               <span className="font-bold text-gray-800">#{idx + 1}</span>
                               <span className="font-mono text-xs text-gray-500">Order {order.etsy_order_no}</span>
                               {isExisting && (
                                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
-                                  {importReplaceExisting ? 'WILL REPLACE' : 'EXISTS — SKIP'}
+                                  {importReplaceExisting ? 'WILL REPLACE' : 'EXISTS'}
                                 </span>
                               )}
                               {!isExisting && (
@@ -3606,10 +3807,52 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
 
             {/* Footer */}
             <div className="flex items-center justify-between p-4 border-t bg-gray-50 rounded-b-xl">
-              {!importPreview ? (
+              {importMode === 'tracking' ? (
+                !importPreview ? (
+                  <>
+                    <span className="text-sm text-gray-500" />
+                    <div className="flex gap-2">
+                      <button onClick={handleImportClose} className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium">
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleParseTracking}
+                        disabled={!importRawText.trim()}
+                        className="px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium"
+                      >
+                        Parse Tracking
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => { setImportPreview(false); setTrackingResults(null); }}
+                      className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium"
+                    >
+                      Back
+                    </button>
+                    <div className="flex gap-2">
+                      <button onClick={handleImportClose} className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium">
+                        {trackingResults ? 'Done' : 'Cancel'}
+                      </button>
+                      {!trackingResults && (
+                        <button
+                          onClick={handleApplyTracking}
+                          disabled={importLoading || trackingUpdates.filter(u => u.matched).length === 0}
+                          className="px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
+                        >
+                          {importLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                          {importLoading ? 'Updating...' : `Update ${trackingUpdates.filter(u => u.matched).length} Tracking Numbers`}
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )
+              ) : !importPreview ? (
                 <>
                   <span className="text-sm text-gray-500">
-                    {importRawText.trim() ? `${(importRawText.match(/Select this order from/g) || []).length} orders detected` : ''}
+                    {importRawText.trim() ? `${(importRawText.match(/Order #/g) || importRawText.match(/Select this order from/g) || []).length || ''} orders detected` : ''}
                   </span>
                   <div className="flex gap-2">
                     <button onClick={handleImportClose} className="px-4 py-2 text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium">
@@ -3639,11 +3882,11 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     {!importResults && (
                       <button
                         onClick={handleImportConfirm}
-                        disabled={importLoading}
+                        disabled={importLoading || importSelected.size === 0}
                         className="px-4 py-2 text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-lg font-medium flex items-center gap-2"
                       >
                         {importLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
-                        {importLoading ? 'Importing...' : `Import ${importReplaceExisting ? importParsed.length : importParsed.length - importExisting.size} Orders${importReplaceExisting && importExisting.size > 0 ? ` (${importExisting.size} replaced)` : ''}`}
+                        {importLoading ? 'Importing...' : `Import ${importSelected.size} Order${importSelected.size !== 1 ? 's' : ''}`}
                       </button>
                     )}
                   </div>

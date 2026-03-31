@@ -672,7 +672,268 @@ function parseGmailEtsyOrders(rawText: string): ParsedEtsyOrder[] {
   return orders;
 }
 
+// Parse orders from Etsy order detail page format (copied from Etsy order page)
+// Format: Order #4014958620 ... Ship to ... Transaction ID ... 1 x $84.00 ... Order total $53.93
+function parseEtsyOrderDetailPage(rawText: string): ParsedEtsyOrder[] {
+  const orders: ParsedEtsyOrder[] = [];
+
+  // Split on "Order #" to handle multiple pasted orders
+  const orderBlocks = rawText.split(/(?=Order #\d{7,})/).filter(b => /Order #\d{7,}/.test(b));
+
+  for (const block of orderBlocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l);
+
+    // Extract order number
+    const orderMatch = lines[0]?.match(/Order #(\d+)/);
+    if (!orderMatch) continue;
+    const etsy_order_no = orderMatch[1];
+
+    // Extract customer name - line after the order number containing "(username)"
+    let customer_name = '';
+    const nameLine = lines.find(l => /\(.+\)$/.test(l));
+    if (nameLine) {
+      customer_name = nameLine.replace(/\s*\(.+\)$/, '').trim();
+    }
+
+    // Extract shipping address - between "Ship to" and next section
+    let addressLines: string[] = [];
+    const shipToIdx = lines.findIndex(l => l === 'Ship to');
+    if (shipToIdx >= 0) {
+      // Name after "Ship to" might be different from buyer name
+      const addrTerminators = [
+        'Scheduled to ship', 'Shop', 'Order date', 'Payment method',
+        'Tracking', 'VAT collected', 'Shipping internationally',
+        'Double check', 'item', 'items'
+      ];
+      for (let i = shipToIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (addrTerminators.some(t => line.startsWith(t)) || /^\d+ items?$/.test(line)) break;
+        addressLines.push(line);
+      }
+    }
+
+    // First line of address is the ship-to name
+    const shipToName = addressLines.length > 0 ? addressLines[0] : customer_name;
+    const streetLines = addressLines.slice(1);
+
+    // Parse address into structured format
+    let address = '';
+    if (streetLines.length >= 2) {
+      const country = streetLines[streetLines.length - 1];
+      const cityStateZip = streetLines[streetLines.length - 2];
+      const street = streetLines.slice(0, streetLines.length - 2).join(', ');
+
+      // Try to parse "CITY, STATE ZIP" or "ZIP CITY" patterns
+      const usMatch = cityStateZip.match(/^(.+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$/);
+      const intlMatch = cityStateZip.match(/^(\d{4,6})\s+(.+)$/);
+
+      if (usMatch) {
+        address = `Name: ${shipToName}\nAddress: ${street}\nCity: ${usMatch[1]}\nProvince/State: ${usMatch[2]}\nCountry: ${country}\nZip code: ${usMatch[3]}`;
+      } else if (intlMatch) {
+        address = `Name: ${shipToName}\nAddress: ${street}\nCity: ${intlMatch[2]}\nCountry: ${country}\nZip code: ${intlMatch[1]}`;
+      } else {
+        address = `Name: ${shipToName}\nAddress: ${street}\nCity: ${cityStateZip}\nCountry: ${country}`;
+      }
+    } else if (streetLines.length === 1) {
+      address = `Name: ${shipToName}\nAddress: ${streetLines[0]}`;
+    } else {
+      address = `Name: ${shipToName}`;
+    }
+
+    // Extract ship by date
+    let ship_by = '';
+    const shipByLine = lines.find(l => /^(Scheduled to ship by|Ship by)/.test(l));
+    if (shipByLine) {
+      const dateStr = shipByLine.replace(/^(Scheduled to ship by|Ship by)\s*/, '');
+      ship_by = parseEtsyDate(dateStr);
+    } else {
+      // Look for it as the line after "Scheduled to ship by"
+      const shipByIdx = lines.findIndex(l => l === 'Scheduled to ship by');
+      if (shipByIdx >= 0 && shipByIdx + 1 < lines.length) {
+        ship_by = parseEtsyDate(lines[shipByIdx + 1]);
+      }
+    }
+
+    // Extract order date
+    let ordered_date = '';
+    const orderDateLine = lines.find(l => /^Order date/.test(l));
+    if (orderDateLine) {
+      const dateStr = orderDateLine.replace(/^Order date\s*/, '');
+      ordered_date = dateStr ? parseEtsyDate(dateStr) : '';
+    }
+    if (!ordered_date) {
+      const orderDateIdx = lines.findIndex(l => l === 'Order date');
+      if (orderDateIdx >= 0 && orderDateIdx + 1 < lines.length) {
+        ordered_date = parseEtsyDate(lines[orderDateIdx + 1]);
+      }
+    }
+
+    // Extract tracking number
+    let tracking_number: string | undefined;
+    const trackingIdx = lines.findIndex(l => l === 'Tracking');
+    if (trackingIdx >= 0 && trackingIdx + 1 < lines.length) {
+      const tn = lines[trackingIdx + 1];
+      if (tn && tn.length >= 5 && !/^via /i.test(tn)) {
+        tracking_number = tn;
+      }
+    }
+
+    // Extract VAT info
+    let has_vat = false;
+    let vat_number: string | undefined;
+    let vat_amount: string | undefined;
+    const vatIdx = lines.findIndex(l => /^VAT collected$/i.test(l));
+    if (vatIdx >= 0) {
+      has_vat = true;
+      const vatBlock = lines.slice(vatIdx + 1, vatIdx + 10).join(' ');
+      const iossMatch = vatBlock.match(/IOSS number,?\s*([\w\d]+)/i);
+      if (iossMatch) vat_number = iossMatch[1].trim();
+      const amountMatch = vatBlock.match(/[£€$]([\d.]+)/);
+      if (amountMatch) vat_amount = amountMatch[0];
+    }
+
+    // Extract order total
+    let sold_for = 0;
+    const totalLine = lines.find(l => /^Order total/.test(l));
+    if (totalLine) {
+      const m = totalLine.match(/[\$£€]([\d.]+)/);
+      if (m) sold_for = parseFloat(m[1]);
+    }
+
+    // Extract tax from order totals
+    if (has_vat && !vat_amount) {
+      const taxLine = lines.find(l => /^Tax\s/.test(l));
+      if (taxLine) {
+        const taxMatch = taxLine.match(/[\$£€]([\d.]+)/);
+        if (taxMatch) vat_amount = taxMatch[0];
+      }
+    }
+
+    // Extract coupon code
+    let coupon_code: string | undefined;
+    let sale_percent: number | undefined;
+    const discountLine = lines.find(l => l.includes('Shop discount'));
+    if (discountLine) {
+      // Look for coupon code elsewhere - buyer applied discounts
+      const couponLine = lines.find(l => l.includes('buyer applied these discounts:'));
+      if (couponLine) {
+        const cMatch = couponLine.match(/discounts:\s*(.+)$/);
+        if (cMatch) coupon_code = cMatch[1].trim();
+      }
+    }
+    // Calculate sale percent from item total and discount
+    const itemTotalLine = lines.find(l => /^Item total/.test(l));
+    const discountAmountLine = lines.find(l => /^Shop discount/.test(l));
+    if (itemTotalLine && discountAmountLine) {
+      const itemM = itemTotalLine.match(/[\$£€]([\d.]+)/);
+      const discM = discountAmountLine.match(/[\$£€]([\d.]+)/);
+      if (itemM && discM) {
+        const itemTotal = parseFloat(itemM[1]);
+        const discount = parseFloat(discM[1]);
+        if (itemTotal > 0) sale_percent = Math.round((discount / itemTotal) * 100);
+      }
+    }
+
+    // Extract products - find lines with "Transaction ID"
+    const productEntries: Array<{
+      name: string; quantity: number; color?: string; size?: string; style?: string;
+    }> = [];
+
+    // Find product blocks - product name comes before Transaction ID
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith('Transaction ID')) continue;
+
+      // Product name: scan backwards to find it
+      let productName = '';
+      for (let j = i - 1; j >= 0; j--) {
+        const l = lines[j];
+        // Skip known non-product lines
+        if (/^(Style|Color|Size|Choose|Shop|Transaction|Quantity|\d+ x |Processing|Returns)/.test(l)) continue;
+        if (/^\d+ items?$/.test(l)) continue;
+        // This should be the product name (a long descriptive line)
+        if (l.length > 20) {
+          productName = l;
+          break;
+        }
+      }
+
+      // Extract variations from lines between product name and Transaction ID
+      let color: string | undefined;
+      let size: string | undefined;
+      let style: string | undefined;
+
+      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+        const l = lines[j];
+        if (/^Style\s*[-–:]/.test(l)) {
+          style = l.replace(/^Style\s*[-–:]\s*/, '').trim();
+        } else if (/^Choose\s/.test(l)) {
+          // "Choose Set: Teapot + 6 Cups" → treat as style
+          style = l.replace(/^Choose\s\w+:\s*/, '').trim();
+        } else if (/^Color\s*[-–:]/.test(l)) {
+          color = l.replace(/^Color\s*[-–:]\s*/, '').trim();
+        } else if (/^Size\s*[-–:]/.test(l)) {
+          size = l.replace(/^Size\s*[-–:]\s*/, '').trim();
+        }
+      }
+
+      // Extract quantity from "1 x $84.00" line
+      let quantity = 1;
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+        const qMatch = lines[j].match(/^(\d+)\s*x\s*[\$£€]/);
+        if (qMatch) {
+          quantity = parseInt(qMatch[1]);
+          break;
+        }
+      }
+
+      if (productName) {
+        productEntries.push({ name: productName, quantity, color, size, style });
+      }
+    }
+
+    if (productEntries.length === 0) continue;
+
+    // Create order entries
+    for (let pi = 0; pi < productEntries.length; pi++) {
+      const product = productEntries[pi];
+      let product_name = product.name;
+      const variation = product.style || product.color || product.size;
+      if (variation) {
+        product_name = `${product.name} – ${variation}`;
+      }
+
+      orders.push({
+        etsy_order_no,
+        customer_name: shipToName || customer_name,
+        address,
+        product_name,
+        quantity: product.quantity,
+        sold_for: pi === 0 ? sold_for : 0,
+        coupon_code: pi === 0 ? coupon_code : undefined,
+        sale_percent: pi === 0 ? sale_percent : undefined,
+        ordered_date,
+        ship_by,
+        tracking_number,
+        color: product.color,
+        size: product.size,
+        style: product.style,
+        has_vat,
+        vat_number,
+        vat_amount,
+      });
+    }
+  }
+
+  return orders;
+}
+
 export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
+  // Auto-detect Etsy order detail page format (Order #1234567890 ...)
+  if (/Order #\d{7,}/.test(rawText) && rawText.includes('Ship to') && rawText.includes('Transaction ID')) {
+    const detailResults = parseEtsyOrderDetailPage(rawText);
+    if (detailResults.length > 0) return detailResults;
+  }
+
   // Auto-detect Gmail-fetched format (text/plain with HTML address blocks or "Your order number is" without colon)
   if (rawText.includes('Transaction ID:') && (rawText.includes('Item:') || rawText.includes('Item price:'))) {
     const gmailResults = parseGmailEtsyOrders(rawText);
@@ -1004,4 +1265,48 @@ export function parseEtsyOrders(rawText: string): ParsedEtsyOrder[] {
   }
 
   return orders;
+}
+
+// Parse tracking updates from Etsy order detail text (copied from Etsy order page)
+export interface ParsedTrackingUpdate {
+  etsy_order_no: string;
+  tracking_number: string;
+  carrier?: string;
+}
+
+export function parseTrackingUpdates(rawText: string): ParsedTrackingUpdate[] {
+  const updates: ParsedTrackingUpdate[] = [];
+
+  // Split on "Order #" to handle multiple pasted orders
+  const orderBlocks = rawText.split(/(?=Order #)/);
+
+  for (const block of orderBlocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l);
+
+    // Extract order number
+    const orderLine = lines.find(l => /^Order #\d+/.test(l));
+    if (!orderLine) continue;
+    const orderMatch = orderLine.match(/#(\d+)/);
+    if (!orderMatch) continue;
+    const etsy_order_no = orderMatch[1];
+
+    // Find "Tracking" line and get the tracking number from next line
+    const trackingIdx = lines.findIndex(l => l === 'Tracking');
+    if (trackingIdx < 0 || trackingIdx + 1 >= lines.length) continue;
+
+    const tracking_number = lines[trackingIdx + 1];
+    if (!tracking_number || tracking_number.length < 5) continue;
+
+    // Optional carrier on the line after (e.g. "via YunExpress")
+    let carrier: string | undefined;
+    if (trackingIdx + 2 < lines.length) {
+      const carrierLine = lines[trackingIdx + 2];
+      const carrierMatch = carrierLine.match(/^via\s+(.+)/i);
+      if (carrierMatch) carrier = carrierMatch[1].trim();
+    }
+
+    updates.push({ etsy_order_no, tracking_number, carrier });
+  }
+
+  return updates;
 }
