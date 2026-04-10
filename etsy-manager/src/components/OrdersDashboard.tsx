@@ -96,7 +96,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const [showBulkActions, setShowBulkActions] = useState(false);
 
   // Filter state for supplier status tabs
-  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'cancelled' | 'issue'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'paid' | 'sent_to_supplier' | 'needs_tracking' | 'shipped' | 'delivered' | 'out_of_stock' | 'cancelled' | 'issue'>('all');
 
   // WhatsApp copy toast
   const [copyToast, setCopyToast] = useState<string | null>(null);
@@ -1172,6 +1172,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
     new: orders.filter(isNewOrder).length,
     paid: orders.filter(order => order.is_paid).length,
     needs_tracking: orders.filter(needsTracking).length,
+    sent_to_supplier: orders.filter(order => !order.is_cancelled && order.sent_to_supplier).length,
     shipped: orders.filter(order => !order.is_cancelled && order.is_shipped).length,
     delivered: orders.filter(order => !order.is_cancelled && order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
@@ -1185,6 +1186,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
       if (statusFilter === 'new' && !isNewOrder(order)) return false;
       if (statusFilter === 'paid' && !order.is_paid) return false;
       if (statusFilter === 'needs_tracking' && !needsTracking(order)) return false;
+      if (statusFilter === 'sent_to_supplier' && (!order.sent_to_supplier || order.is_cancelled)) return false;
       if (statusFilter === 'shipped' && (!order.is_shipped || order.is_cancelled)) return false;
       if (statusFilter === 'delivered' && (!order.is_delivered || order.is_cancelled)) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
@@ -1527,6 +1529,21 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             )}
           </button>
           <button
+            onClick={() => setStatusFilter('sent_to_supplier')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'sent_to_supplier'
+                ? 'bg-cyan-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-cyan-50 border border-gray-200'
+            }`}
+          >
+            Sent to Supplier
+            {statusCounts.sent_to_supplier > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'sent_to_supplier' ? 'bg-cyan-600' : 'bg-cyan-100 text-cyan-700'}`}>
+                {statusCounts.sent_to_supplier}
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setStatusFilter('needs_tracking')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
               statusFilter === 'needs_tracking'
@@ -1648,6 +1665,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                   </button>
                   <button onClick={() => handleBulkStatusUpdate({ is_paid: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark as Unpaid
+                  </button>
+                  <div className="border-t border-gray-100 my-1" />
+                  <button onClick={() => handleBulkStatusUpdate({ sent_to_supplier: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-cyan-500" /> Mark Sent to Supplier
+                  </button>
+                  <button onClick={() => handleBulkStatusUpdate({ sent_to_supplier: false })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-gray-300" /> Mark Not Sent
                   </button>
                   <div className="border-t border-gray-100 my-1" />
                   <button onClick={() => handleBulkStatusUpdate({ is_shipped: true })} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
@@ -1988,6 +2012,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                           </td>
                           <td className="px-2 py-3 text-center border-r border-gray-100">
                             <div className="flex flex-col items-center gap-1">
+                              {order.is_cancelled && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">CANCELLED</span>}
                               {isNewOrder(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>}
                               {order.sent_to_supplier && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                               {isOutOfStock(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>}
@@ -2154,6 +2179,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             </td>
                             <td className="px-2 py-2 text-center border-r border-gray-100">
                               <div className="flex flex-col items-center gap-1">
+                                {order.is_cancelled && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">CANCELLED</span>}
                                 {isNewOrder(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">NEW</span>}
                                 {order.sent_to_supplier && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                                 {isOutOfStock(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">OUT</span>}
@@ -2270,6 +2296,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                       <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">{order.product_name.split(' – ')[1]}</span>
                     )}
                     {!isGroupChild && order.etsy_order_no && <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>}
+                    {order.is_cancelled && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">CANCELLED</span>}
                     {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
                     {order.sent_to_supplier && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-cyan-100 text-cyan-700">SENT</span>}
                     {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
@@ -3785,7 +3812,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <div><span className="text-gray-500">Ordered:</span> {order.ordered_date}</div>
                             <div><span className="text-gray-500">Ship By:</span> {order.ship_by}</div>
                             {order.coupon_code && <div><span className="text-gray-500">Coupon:</span> {order.coupon_code}</div>}
-                            {order.has_vat && <div><span className="text-gray-500">VAT:</span> Yes{order.vat_amount ? ` (${order.vat_amount})` : ''}</div>}
+                            <div><span className="text-gray-500">VAT:</span> {order.has_vat ? <span className="text-blue-700 font-medium">Yes{order.vat_amount ? ` (${order.vat_amount})` : ''}{order.vat_number ? ` — ${order.vat_number}` : ''}</span> : <span className="text-gray-400">No</span>}</div>
                             {order.is_gift && <div><span className="text-gray-500">Gift:</span> Yes</div>}
                             {match?.supplier_name && <div><span className="text-gray-500">Supplier:</span> <span className="text-blue-600">{match.supplier_name}</span></div>}
                             {match?.matched_product_name && (

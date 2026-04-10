@@ -59,31 +59,53 @@ function htmlToText(html: string): string {
   return text;
 }
 
-function extractPlainText(payload: any): string {
-  // If the payload itself is text/plain
+function extractHtmlPart(payload: any): string | null {
+  if (payload.mimeType === 'text/html' && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        return decodeBase64Url(part.body.data);
+      }
+      if (part.parts) {
+        const nested = extractHtmlPart(part);
+        if (nested) return nested;
+      }
+    }
+  }
+  return null;
+}
+
+function extractPlainTextPart(payload: any): string | null {
   if (payload.mimeType === 'text/plain' && payload.body?.data) {
     return decodeBase64Url(payload.body.data);
   }
-
-  // Search through parts recursively
   if (payload.parts) {
     for (const part of payload.parts) {
       if (part.mimeType === 'text/plain' && part.body?.data) {
         return decodeBase64Url(part.body.data);
       }
       if (part.parts) {
-        const nested = extractPlainText(part);
+        const nested = extractPlainTextPart(part);
         if (nested) return nested;
       }
     }
-    // Fallback to text/html - convert preserving line structure
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/html' && part.body?.data) {
-        const html = decodeBase64Url(part.body.data);
-        return htmlToText(html);
-      }
-    }
   }
+  return null;
+}
+
+function extractPlainText(payload: any): string {
+  // Prefer HTML version — it contains complete info (VAT, address, etc.)
+  // The text/plain version strips out important sections like VAT
+  const html = extractHtmlPart(payload);
+  if (html) {
+    return htmlToText(html);
+  }
+
+  // Fallback to text/plain if no HTML
+  const plain = extractPlainTextPart(payload);
+  if (plain) return plain;
 
   return '';
 }

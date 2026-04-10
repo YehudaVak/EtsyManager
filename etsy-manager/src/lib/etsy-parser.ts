@@ -280,35 +280,37 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
 
     const address = formatAddress(customer_name, addressRawLines);
 
-    // Extract VAT info
+    // Extract VAT info — search raw block text, not just lines
     let has_vat = false;
     let vat_number: string | undefined;
     let vat_amount: string | undefined;
 
-    const vatIdx = lines.findIndex(l => /^\s*VAT\s+collected\s*$/i.test(l));
-    if (vatIdx >= 0) {
+    // Search in both lines and raw block text
+    const vatIdx = lines.findIndex(l => /VAT\s+collected/i.test(l));
+    const blockHasVat = /VAT\s+collected/i.test(block);
+
+    if (vatIdx >= 0 || blockHasVat) {
       has_vat = true;
-      const vatBlock = lines.slice(vatIdx + 1, vatIdx + 10).join(' ');
-      const iossMatch = vatBlock.match(/IOSS number,?\s*([\w\d]+)/i);
+
+      // Extract IOSS or VAT number from raw block
+      const iossMatch = block.match(/IOSS number[,:]?\s*([\w\d]+)/i);
       if (iossMatch) vat_number = iossMatch[1].trim();
-      const vatNumMatch = vatBlock.match(/VAT number,?\s*([\d\s]+)/i);
+      const vatNumMatch = block.match(/VAT number[,:]?\s*([\d\s]+)/i);
       if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
-      // Don't extract amount from VAT block — it's the customs value, not VAT amount
-      // VAT amount comes from the Tax line in order totals
     }
 
     // Check Tax line in order totals for vat_amount
     if (has_vat) {
-      const taxIdx2 = lines.findIndex(l => /^\s*Tax:\s*$/i.test(l) || /^\s*Tax:\s*[\$£€]/.test(l));
-      if (taxIdx2 >= 0) {
-        const taxLine = lines[taxIdx2];
-        const taxMatch = taxLine.match(/[\$£€₪]([\d.,]+)/);
-        if (taxMatch) {
-          vat_amount = taxMatch[0];
-        } else if (taxIdx2 + 1 < lines.length) {
-          // Tax amount might be on the next line
-          const nextLine = lines[taxIdx2 + 1];
-          const nextMatch = nextLine.match(/[\$£€₪]([\d.,]+)/);
+      // Try matching Tax with amount on same line: "Tax: $7.59" or "Tax $7.59"
+      const taxInlineMatch = block.match(/Tax:?\s*[\$£€₪]([\d.,]+)/i);
+      if (taxInlineMatch) {
+        vat_amount = taxInlineMatch[0].replace(/^Tax:?\s*/i, '');
+      }
+      // Try finding Tax: on its own line, amount on next line
+      if (!vat_amount) {
+        const taxIdx2 = lines.findIndex(l => /^\s*Tax:?\s*$/i.test(l));
+        if (taxIdx2 >= 0 && taxIdx2 + 1 < lines.length) {
+          const nextMatch = lines[taxIdx2 + 1].match(/[\$£€₪]([\d.,]+)/);
           if (nextMatch) vat_amount = nextMatch[0];
         }
       }
@@ -478,8 +480,6 @@ function parseGmailEtsyOrders(rawText: string): ParsedEtsyOrder[] {
     const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
     // Debug: log first 5 lines of each block
-    console.log('[Gmail parser] Block first 5 lines:', lines.slice(0, 5));
-
     // Extract order number: "Your order number is 4000803964." or from URL "/orders/XXXX"
     let etsy_order_no = '';
     const orderNoMatch = block.match(/Your order number is (\d+)/);
