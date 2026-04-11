@@ -159,6 +159,31 @@ function formatAddress(name: string, lines: string[], phone?: string): string {
   let country = '';
   let addressLines = [...lines];
 
+  // If we have only 1 line with commas (e.g. from HTML conversion), split it
+  // "Po Box 103, HONOMU, HI 96728-0103, United States"
+  if (addressLines.length === 1 && addressLines[0].includes(',')) {
+    const parts_split = addressLines[0].split(',').map(p => p.trim()).filter(Boolean);
+    // Check if last part is a country
+    if (parts_split.length >= 2 && countries.includes(parts_split[parts_split.length - 1])) {
+      const countryPart = parts_split[parts_split.length - 1];
+      const rest = parts_split.slice(0, -1);
+      // US format: last part is "STATE ZIP" (e.g. "HI 96728-0103"), second-to-last is city
+      const lastRest = rest[rest.length - 1];
+      const usStateZipMatch = lastRest.match(/^([A-Z]{2})\s+([\d-]+)$/);
+      if (usStateZipMatch && rest.length >= 2) {
+        // Merge city + "STATE ZIP" into "City, STATE ZIP"
+        const city = rest[rest.length - 2];
+        const cityLine = `${city}, ${lastRest}`;
+        const streetParts = rest.slice(0, -2);
+        addressLines = [...streetParts, cityLine, countryPart];
+      } else {
+        addressLines = [...rest, countryPart];
+      }
+    } else {
+      addressLines = parts_split;
+    }
+  }
+
   // Check if last line is a country
   const lastLine = addressLines[addressLines.length - 1].trim();
   if (countries.includes(lastLine)) {
@@ -269,11 +294,14 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
         'Shipping internationally', 'Double check', 'VAT collected', 'VAT Collected',
         'We\'re applying', 'Sell with confidence', 'bell icon',
         'Choose a DDP', 'Learn more', 'Learn More', 'Using shipping labels',
+        'USPS', 'verified this address', 'This address',
       ];
 
       for (let i = addrIdx + 2; i < lines.length; i++) {
         const line = lines[i];
         if (addrTerminators.some(t => line.startsWith(t))) break;
+        // Skip lines that contain verification messages inline
+        if (/verified this address/i.test(line)) break;
         addressRawLines.push(line);
       }
     }

@@ -49,7 +49,12 @@ function htmlToText(html: string): string {
   text = text.replace(/&ldquo;/g, '"');
   text = text.replace(/&ndash;/g, '–');
   text = text.replace(/&mdash;/g, '—');
+  text = text.replace(/&reg;/g, '');
+  text = text.replace(/&trade;/g, '');
+  text = text.replace(/&copy;/g, '');
+  text = text.replace(/&hellip;/g, '...');
   text = text.replace(/&#\d+;/g, '');
+  text = text.replace(/&[a-z]+;/gi, ''); // Remove any remaining entities
   // Clean up whitespace: collapse spaces within lines, but preserve newlines
   text = text.replace(/[^\S\n]+/g, ' ');
   // Clean up multiple blank lines
