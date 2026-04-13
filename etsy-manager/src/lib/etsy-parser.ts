@@ -275,10 +275,46 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
     if (!orderNoMatch) continue;
     const etsy_order_no = orderNoMatch[1];
 
-    // Extract date from "Paid via Etsy Payments on Mar 12, 2026"
+    // Extract date from multiple sources
+    let ordered_date = '';
+
+    // 1. Try "Paid via Etsy Payments on Mar 12, 2026"
     const paidLine = lines.find(l => l.includes('Paid via Etsy Payments on'));
-    const ordered_date = paidLine ? parseEtsyDate(paidLine.replace(/.*Paid via Etsy Payments on\s*/, '')) : '';
-    const ship_by = ordered_date ? calculateShipBy(ordered_date) : '';
+    if (paidLine) {
+      ordered_date = parseEtsyDate(paidLine.replace(/.*Paid via Etsy Payments on\s*/, ''));
+    }
+
+    // 2. Try EMAIL_DATE header (injected by Gmail fetch): "EMAIL_DATE: Fri, 7 Mar 2026 10:23:45 +0000"
+    if (!ordered_date) {
+      const emailDateLine = lines.find(l => l.startsWith('EMAIL_DATE:'));
+      if (emailDateLine) {
+        const d = new Date(emailDateLine.replace('EMAIL_DATE:', '').trim());
+        if (!isNaN(d.getTime())) {
+          ordered_date = d.toISOString().split('T')[0];
+        }
+      }
+    }
+
+    // 3. Try raw block for "Paid via" pattern (may differ in HTML version)
+    if (!ordered_date) {
+      const paidMatch = block.match(/Paid via.*?on\s+(\w+ \d+,?\s*\d{4})/);
+      if (paidMatch) ordered_date = parseEtsyDate(paidMatch[1]);
+    }
+
+    // Extract ship_by from EMAIL_SUBJECT header: "Ship by Mar 19"
+    let ship_by = '';
+    const subjectLine = lines.find(l => l.startsWith('EMAIL_SUBJECT:'));
+    if (subjectLine) {
+      const shipByMatch = subjectLine.match(/Ship by (\w+ \d+)/);
+      if (shipByMatch) {
+        const year = ordered_date ? ordered_date.split('-')[0] : new Date().getFullYear().toString();
+        ship_by = parseEtsyDate(`${shipByMatch[1]}, ${year}`);
+      }
+    }
+    // Fallback: calculate from ordered_date
+    if (!ship_by && ordered_date) {
+      ship_by = calculateShipBy(ordered_date);
+    }
 
     // Extract shipping address
     const addrIdx = lines.findIndex(l => l === 'Shipping address');
