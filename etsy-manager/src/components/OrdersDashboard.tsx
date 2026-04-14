@@ -37,24 +37,34 @@ function matchProductByName(baseName: string, products: { id: string; name: stri
     if (match) return match;
   }
 
-  // 4. Fuzzy word-overlap: if >70% of the shorter name's words appear in the longer one, it's a match
-  const baseWords = lowerBase.split(/[\s|,\-–]+/).filter(w => w.length > 2);
-  if (baseWords.length >= 3) {
+  // Stop words to ignore in matching
+  const STOP_WORDS = new Set(['for', 'and', 'the', 'with', 'her', 'his', 'from', 'this', 'that', 'home', 'gift', 'unique', 'style', 'new']);
+
+  // 4. Fuzzy word-overlap: uses unique significant words
+  const baseWordSet = new Set(
+    lowerBase.split(/[\s|,\-–\/]+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+  );
+  if (baseWordSet.size >= 3) {
     let bestMatch: typeof products[0] | null = null;
     let bestScore = 0;
     for (const p of products) {
       if (!p.name) continue;
-      const prodWords = p.name.toLowerCase().split(/[\s|,\-–]+/).filter(w => w.length > 2);
-      if (prodWords.length < 3) continue;
-      const commonWords = new Set(baseWords.filter(w => prodWords.includes(w)));
-      // Score based on how well the shorter name is covered by the longer one
-      const score = commonWords.size / Math.min(baseWords.length, prodWords.length);
+      const prodWordSet = new Set(
+        p.name.toLowerCase().split(/[\s|,\-–\/]+/).filter(w => w.length > 2 && !STOP_WORDS.has(w))
+      );
+      if (prodWordSet.size < 3) continue;
+      // Count unique common words
+      let common = 0;
+      for (const w of baseWordSet) if (prodWordSet.has(w)) common++;
+      // Score = common / smaller unique set — rewards products that share most of their distinctive words
+      const score = common / Math.min(baseWordSet.size, prodWordSet.size);
       if (score > bestScore) {
         bestScore = score;
         bestMatch = p;
       }
     }
-    if (bestMatch && bestScore >= 0.7) return bestMatch;
+    // Lowered to 0.55 — product names often differ due to Etsy A/B testing
+    if (bestMatch && bestScore >= 0.55) return bestMatch;
   }
 
   return null;
@@ -566,11 +576,25 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   };
 
   const handleCopyText = async (order: Order) => {
+    const text = buildOrderMessage(order);
     try {
-      await navigator.clipboard.writeText(buildOrderMessage(order));
+      await navigator.clipboard.writeText(text);
       setCopyToast('Text copied!');
     } catch {
-      setCopyToast('Failed to copy text');
+      // Fallback: use textarea trick
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        setCopyToast('Text copied!');
+      } catch {
+        setCopyToast('Failed to copy text');
+      }
     }
     setTimeout(() => setCopyToast(null), 2000);
   };
@@ -1162,18 +1186,18 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   }, [handleResizeMove, handleResizeEnd, handleRowResizeMove, handleRowResizeEnd]);
 
   // Helper functions for order status
-  const isNewOrder = (order: Order) => !order.is_cancelled && !order.is_shipped && !order.is_delivered && !order.tracking_number;
+  const isNewOrder = (order: Order) => !order.is_cancelled && !order.is_paid && !order.sent_to_supplier && !order.is_shipped && !order.is_delivered && !order.tracking_number;
   const needsTracking = (order: Order) => !order.is_cancelled && !order.tracking_number;
   const isOutOfStock = (order: Order) => !order.is_cancelled && order.is_out_of_stock;
 
   // Count orders by status for filter tabs
   const statusCounts = {
-    all: orders.length,
+    all: orders.filter(order => !order.is_cancelled).length,
     new: orders.filter(isNewOrder).length,
     paid: orders.filter(order => order.is_paid).length,
     needs_tracking: orders.filter(needsTracking).length,
-    sent_to_supplier: orders.filter(order => !order.is_cancelled && order.sent_to_supplier).length,
-    shipped: orders.filter(order => !order.is_cancelled && order.is_shipped).length,
+    sent_to_supplier: orders.filter(order => !order.is_cancelled && order.sent_to_supplier && !order.is_paid && !order.tracking_number).length,
+    shipped: orders.filter(order => !order.is_cancelled && (order.is_shipped || order.tracking_number) && !order.is_delivered).length,
     delivered: orders.filter(order => !order.is_cancelled && order.is_delivered).length,
     out_of_stock: orders.filter(isOutOfStock).length,
     cancelled: orders.filter(order => !!order.is_cancelled).length,
@@ -1183,11 +1207,13 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
   const filteredOrders = orders
     .filter(order => {
       // Apply status filter first
+      // "All Orders" excludes cancelled — they only show in Cancelled tab
+      if (statusFilter === 'all' && order.is_cancelled) return false;
       if (statusFilter === 'new' && !isNewOrder(order)) return false;
       if (statusFilter === 'paid' && !order.is_paid) return false;
       if (statusFilter === 'needs_tracking' && !needsTracking(order)) return false;
-      if (statusFilter === 'sent_to_supplier' && (!order.sent_to_supplier || order.is_cancelled)) return false;
-      if (statusFilter === 'shipped' && (!order.is_shipped || order.is_cancelled)) return false;
+      if (statusFilter === 'sent_to_supplier' && (!order.sent_to_supplier || order.is_cancelled || order.is_paid || order.tracking_number)) return false;
+      if (statusFilter === 'shipped' && ((!order.is_shipped && !order.tracking_number) || order.is_cancelled || order.is_delivered)) return false;
       if (statusFilter === 'delivered' && (!order.is_delivered || order.is_cancelled)) return false;
       if (statusFilter === 'out_of_stock' && !isOutOfStock(order)) return false;
       if (statusFilter === 'cancelled' && !order.is_cancelled) return false;
@@ -1514,21 +1540,6 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             )}
           </button>
           <button
-            onClick={() => setStatusFilter('paid')}
-            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
-              statusFilter === 'paid'
-                ? 'bg-green-500 text-white'
-                : 'bg-white text-gray-700 hover:bg-green-50 border border-gray-200'
-            }`}
-          >
-            Paid
-            {statusCounts.paid > 0 && (
-              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'paid' ? 'bg-green-600' : 'bg-green-100 text-green-700'}`}>
-                {statusCounts.paid}
-              </span>
-            )}
-          </button>
-          <button
             onClick={() => setStatusFilter('sent_to_supplier')}
             className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
               statusFilter === 'sent_to_supplier'
@@ -1540,6 +1551,21 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
             {statusCounts.sent_to_supplier > 0 && (
               <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'sent_to_supplier' ? 'bg-cyan-600' : 'bg-cyan-100 text-cyan-700'}`}>
                 {statusCounts.sent_to_supplier}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setStatusFilter('paid')}
+            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+              statusFilter === 'paid'
+                ? 'bg-green-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-green-50 border border-gray-200'
+            }`}
+          >
+            Paid
+            {statusCounts.paid > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-xs ${statusFilter === 'paid' ? 'bg-green-600' : 'bg-green-100 text-green-700'}`}>
+                {statusCounts.paid}
               </span>
             )}
           </button>
@@ -2014,7 +2040,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                             <div className="flex flex-col items-center gap-1">
                               {order.is_cancelled && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">CANCELLED</span>}
                               {isNewOrder(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">NEW</span>}
-                              {order.sent_to_supplier && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">SENT</span>}
+                              {order.sent_to_supplier && !order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                               {isOutOfStock(order) && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">OUT</span>}
                                                             {order.is_paid && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">PAID</span>}
                               {order.is_shipped && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
@@ -2181,7 +2207,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                               <div className="flex flex-col items-center gap-1">
                                 {order.is_cancelled && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">CANCELLED</span>}
                                 {isNewOrder(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-orange-100 text-orange-700">NEW</span>}
-                                {order.sent_to_supplier && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-cyan-100 text-cyan-700">SENT</span>}
+                                {order.sent_to_supplier && !order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-cyan-100 text-cyan-700">SENT</span>}
                                 {isOutOfStock(order) && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-red-100 text-red-700">OUT</span>}
                                                                 {order.is_paid && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700">PAID</span>}
                                 {order.is_shipped && <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700">SHIPPED</span>}
@@ -2298,7 +2324,7 @@ export default function OrdersDashboard({ isAdmin }: OrdersDashboardProps) {
                     {!isGroupChild && order.etsy_order_no && <span className="text-xs text-gray-500">#{order.etsy_order_no}</span>}
                     {order.is_cancelled && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">CANCELLED</span>}
                     {isNewOrder(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-100 text-orange-700">NEW</span>}
-                    {order.sent_to_supplier && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-cyan-100 text-cyan-700">SENT</span>}
+                    {order.sent_to_supplier && !order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-cyan-100 text-cyan-700">SENT</span>}
                     {isOutOfStock(order) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">OUT</span>}
                                         {order.is_paid && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-green-100 text-green-700">PAID</span>}
                     {order.is_shipped && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-100 text-purple-700">SHIPPED</span>}

@@ -209,6 +209,8 @@ function formatAddress(name: string, lines: string[], phone?: string): string {
     const ukSimpleMatch = cityLine.match(/^(.+?),\s*([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2})$/);
     // Canada format: "City PROV POSTAL" like "Toronto ON M5J 2N4"
     const caMatch = cityLine.match(/^(.+?)\s+([A-Z]{2})\s+([A-Z]\d[A-Z]\s*\d[A-Z]\d)$/);
+    // Australia format: "City STATE POSTCODE" like "CARRUM DOWNS VIC 3201"
+    const auMatch = cityLine.match(/^(.+?)\s+(NSW|VIC|QLD|WA|SA|TAS|NT|ACT)\s+(\d{4})$/);
     // German/EU format: "12345 City"
     const euMatch = cityLine.match(/^(\d{4,5})\s+(.+)$/);
 
@@ -222,6 +224,11 @@ function formatAddress(name: string, lines: string[], phone?: string): string {
       parts.push(`Province/State: ${caMatch[2]}`);
       parts.push(`Country: ${country || 'Canada'}`);
       parts.push(`Zip code: ${caMatch[3]}`);
+    } else if (auMatch) {
+      parts.push(`City: ${auMatch[1]}`);
+      parts.push(`Province/State: ${auMatch[2]}`);
+      parts.push(`Country: ${country || 'Australia'}`);
+      parts.push(`Zip code: ${auMatch[3]}`);
     } else if (ukMatch) {
       parts.push(`City: ${ukMatch[1]}`);
       parts.push(`Province/State: ${ukMatch[2]}`);
@@ -262,8 +269,18 @@ function formatAddress(name: string, lines: string[], phone?: string): string {
 function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
   const orders: ParsedEtsyOrder[] = [];
 
-  // Split by individual order emails
-  const emailBlocks = rawText.split(/Congratulations on your Etsy sale/).filter(b => b.includes('order number is'));
+  // Split by individual order emails, keeping EMAIL_DATE/EMAIL_SUBJECT headers with each block
+  // First split by EMAIL_DATE markers (each email starts with EMAIL_DATE from Gmail fetch)
+  let emailBlocks: string[] = [];
+
+  if (rawText.includes('EMAIL_DATE:')) {
+    // Split by EMAIL_DATE markers — each block is one complete email
+    const dateSplits = rawText.split(/(?=EMAIL_DATE:)/);
+    emailBlocks = dateSplits.filter(b => b.includes('order number is'));
+  } else {
+    // Fallback: split by "Congratulations on your Etsy sale"
+    emailBlocks = rawText.split(/Congratulations on your Etsy sale/).filter(b => b.includes('order number is'));
+  }
 
   for (const block of emailBlocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -361,22 +378,11 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
       if (iossMatch) vat_number = iossMatch[1].trim();
       const vatNumMatch = block.match(/VAT number[,:]?\s*([\d\s]+)/i);
       if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
-    }
 
-    // Check Tax line in order totals for vat_amount
-    if (has_vat) {
-      // Try matching Tax with amount on same line: "Tax: $7.59" or "Tax $7.59"
-      const taxInlineMatch = block.match(/Tax:?\s*[\$£€₪]([\d.,]+)/i);
-      if (taxInlineMatch) {
-        vat_amount = taxInlineMatch[0].replace(/^Tax:?\s*/i, '');
-      }
-      // Try finding Tax: on its own line, amount on next line
-      if (!vat_amount) {
-        const taxIdx2 = lines.findIndex(l => /^\s*Tax:?\s*$/i.test(l));
-        if (taxIdx2 >= 0 && taxIdx2 + 1 < lines.length) {
-          const nextMatch = lines[taxIdx2 + 1].match(/[\$£€₪]([\d.,]+)/);
-          if (nextMatch) vat_amount = nextMatch[0];
-        }
+      // Extract customs value from VAT block: "value of this order in euros, €15.69" or "in pounds, £30.05"
+      const customsMatch = block.match(/value of this order in \w+[,:]?\s*([£€]\s*[\d.,]+)/i);
+      if (customsMatch) {
+        vat_amount = customsMatch[1].replace(/\s/g, '');
       }
     }
 
@@ -409,6 +415,10 @@ function parseEtsyEmailOrders(rawText: string): ParsedEtsyOrder[] {
           size = line.replace('Size:', '').trim();
         } else if (line.startsWith('Style:')) {
           style = line.replace('Style:', '').trim();
+        } else if (line.startsWith('Style -') || line.startsWith('Style –')) {
+          // "Style - Square/Bowl: Square Plate Set" → extract value after ":"
+          const styleMatch = line.match(/^Style\s*[-–]\s*.+?:\s*(.+)$/);
+          if (styleMatch) style = styleMatch[1].trim();
         } else if (line.startsWith('Choose')) {
           // "Choose Set: Blue Ceramic Teapot"
           const chooseMatch = line.match(/^Choose\s+\w+:\s*(.+)$/);
@@ -725,21 +735,9 @@ function parseGmailEtsyOrders(rawText: string): ParsedEtsyOrder[] {
       if (iossMatch) vat_number = iossMatch[1].trim();
       const vatNumMatch = vatBlock.match(/VAT number,?\s*([\d\s]+)/i);
       if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
-    }
-    // Get VAT amount from Tax line
-    if (has_vat) {
-      const taxIdx2 = lines.findIndex(l => /^\s*Tax:\s*$/i.test(l) || /^\s*Tax:\s*[\$£€₪]/.test(l));
-      if (taxIdx2 >= 0) {
-        const taxLine = lines[taxIdx2];
-        const taxMatch = taxLine.match(/[\$£€₪]([\d.,]+)/);
-        if (taxMatch) {
-          vat_amount = taxMatch[0];
-        } else if (taxIdx2 + 1 < lines.length) {
-          const nextLine = lines[taxIdx2 + 1];
-          const nextMatch = nextLine.match(/[\$£€₪]([\d.,]+)/);
-          if (nextMatch) vat_amount = nextMatch[0];
-        }
-      }
+      // Extract customs value: "value of this order in euros, €15.69"
+      const customsMatch = vatBlock.match(/value of this order in \w+[,:]?\s*([£€]\s*[\d.,]+)/i);
+      if (customsMatch) vat_amount = customsMatch[1].replace(/\s/g, '').replace(/,$/, '');
     }
 
     // Create order entries
@@ -893,6 +891,9 @@ function parseEtsyOrderDetailPage(rawText: string): ParsedEtsyOrder[] {
       if (iossMatch) vat_number = iossMatch[1].trim();
       const vatNumMatch = vatBlock.match(/VAT number,?\s*([\d\s]+)/i);
       if (vatNumMatch && !vat_number) vat_number = vatNumMatch[1].trim();
+      // Extract customs value: "value of this order in euros, €15.69"
+      const customsMatch = vatBlock.match(/value of this order in \w+[,:]?\s*([£€]\s*[\d.,]+)/i);
+      if (customsMatch) vat_amount = customsMatch[1].replace(/\s/g, '').replace(/,$/, '');
     }
 
     // Extract order total
@@ -901,24 +902,6 @@ function parseEtsyOrderDetailPage(rawText: string): ParsedEtsyOrder[] {
     if (totalLine) {
       const m = totalLine.match(/[\$£€]([\d.]+)/);
       if (m) sold_for = parseFloat(m[1]);
-    }
-
-    // Extract tax from order totals for vat_amount
-    if (has_vat) {
-      // Try "Tax $7.59" on same line
-      const taxLine = lines.find(l => /^\s*Tax\s/.test(l));
-      if (taxLine) {
-        const taxMatch = taxLine.match(/[\$£€₪]([\d.,]+)/);
-        if (taxMatch) vat_amount = taxMatch[0];
-      }
-      // Try "Tax:" on separate line
-      if (!vat_amount) {
-        const taxIdx2 = lines.findIndex(l => /^\s*Tax:?\s*$/i.test(l));
-        if (taxIdx2 >= 0 && taxIdx2 + 1 < lines.length) {
-          const nextMatch = lines[taxIdx2 + 1].match(/[\$£€₪]([\d.,]+)/);
-          if (nextMatch) vat_amount = nextMatch[0];
-        }
-      }
     }
 
     // Extract coupon code
